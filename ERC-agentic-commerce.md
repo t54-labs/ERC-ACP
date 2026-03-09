@@ -182,6 +182,7 @@ Implementations MAY provide a `BaseACPHook` that routes the generic `beforeActio
 - Custom fee logic or payment splitting
 - Atomic side transfers (e.g. fund transfer hook)
 - Provider bidding (e.g. bidding hook)
+- Multi-contract hook systems (e.g. merchant custody underwriting / MCU)
 
 ---
 
@@ -269,6 +270,16 @@ Step 5 — job continues normally
 ```
 
 **Key property:** The client cannot fabricate a provider commitment. The hook verifies the chosen provider actually signed a bid at the claimed price. The client is incentivised to pick the lowest bidder since they are the one paying.
+
+---
+
+#### Example 3 — MCU Hook System
+
+**Problem:** Some ACP extensions do not fit a single `BaseACPHook` contract. Merchant custody underwriting needs a policy hook, an evaluator for underwriter signatures, a coordinator for explicit settlement actions, per-job adapters, and a `BondManager` integration.
+
+**Solution:** Use a documented wiring helper such as `contracts/examples/MCUHookSystemExample.sol` to deploy and wire `MCUHookLite`, `MCUCoordinator`, and `UnderwriterEvaluator`, then use `setBudget(..., abi.encode(MCUCommit))` plus a matching `UnderwritePermit` for the protected funding flow.
+
+See also: `contracts/mcu/README.md` for the full MCU profile and `contracts/mcu/mcu-hook-system-sequence.md` for the concrete sequence diagram.
 
 ---
 
