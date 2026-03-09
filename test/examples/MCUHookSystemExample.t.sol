@@ -20,6 +20,18 @@ contract MockExampleACP is IAgenticCommerceKernel {
         revert("unused");
     }
 
+    function getJobKind(uint256) external pure override returns (JobKind) {
+        return JobKind.Standalone;
+    }
+
+    function getParentJobId(uint256) external pure override returns (uint256) {
+        return 0;
+    }
+
+    function getCloseJobId(uint256) external pure override returns (uint256) {
+        return 0;
+    }
+
     function setProvider(uint256, address, bytes calldata) external pure override {
         revert("unused");
     }

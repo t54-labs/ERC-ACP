@@ -21,7 +21,7 @@ sequenceDiagram
 
     Note over User,Hook: Phase 1 - Request
     User->>Client: Approve selected option
-    Client->>ACP: initiateJob() / createJob(...)
+    Client->>ACP: initiateJob() / createJob(...) / createOpenJob(...)
     Note over Client,ACP: Client creates the JobRequestMemo
     Client->>ACP: setBudget(...) / commit requirements and budget
     ACP->>Hook: beforeAction(jobId, setBudget, data)

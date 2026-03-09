@@ -49,9 +49,25 @@ Allowed transitions:
 
 No other transitions are valid.
 
+### Linked Two-Phase Jobs (OPTIONAL)
+
+Implementations MAY support **linked two-phase jobs** for stateful workflows that
+need an `open` phase followed by a later `close` or evaluation phase.
+
+In such implementations:
+
+- `createOpenJob(...)` creates an **Open-phase** job.
+- `createCloseJob(parentJobId, ...)` creates a **Close-phase** job linked to a
+  previously completed Open-phase parent.
+- The close job SHALL inherit the same `client`, `provider`, and `evaluator` as
+  the parent open job.
+- A parent open job SHALL have at most one linked close job.
+- `createCloseJob(...)` SHALL revert unless the parent open job has already
+  reached `Completed`.
+
 ### Roles
 
-- **Client**: Creates job (with description), may set provider via `setProvider(jobId, provider)` when job was created with no provider, sets budget with `setBudget(jobId, amount)`, funds escrow with `fund(jobId, expectedBudget)`, may reject **only when status is Open**. Receives refund on Rejected/Expired.
+- **Client**: Creates standalone or open jobs (with description), may create a linked close job when the parent open job is completed, may set provider via `setProvider(jobId, provider)` when job was created with no provider, sets budget with `setBudget(jobId, amount)`, funds escrow with `fund(jobId, expectedBudget)`, may reject **only when status is Open**. Receives refund on Rejected/Expired.
 - **Provider**: Set at creation or later via `setProvider`. May call `setBudget(jobId, amount)` to propose or negotiate a price. Calls `submit(jobId, deliverable)` when work is done to move the job from Funded to Submitted for evaluation. Receives payment when job is Completed. Does not call `complete` or `reject`.
 - **Evaluator**: Single address per job, set at creation. When status is Submitted, **only** the evaluator MAY call `complete(jobId, reason?)` or `reject(jobId, reason?)`. When status is Funded, the evaluator MAY call `reject(jobId, reason?)` (before submission). MAY be the client (e.g. `evaluator = client`) so the client can complete or reject the job without a third party, or MAY be a **smart contract** that performs arbitrary checks (e.g. verifying a zero‑knowledge proof or aggregating off‑chain signals) before deciding whether to call `complete` or `reject` on the job.
 
@@ -65,6 +81,10 @@ Each job SHALL have at least:
 - `expiredAt` (uint256 timestamp)
 - `status` (Open | Funded | Submitted | Completed | Rejected | Expired)
 - `hook` (address) — OPTIONAL. External hook contract called before and after core functions (see Hooks below). MAY be `address(0)` (no hook).
+- OPTIONAL for linked two-phase implementations:
+  - `jobKind` (`Standalone` | `Open` | `Close`)
+  - `parentJobId` (for close jobs)
+  - `closeJobId` (for open jobs with a linked close job)
 
 Payment SHALL use a single ERC-20 token (global for the contract or specified at creation). Implementations MAY support a per-job token; the specification only requires one token per contract.
 
@@ -80,7 +100,11 @@ SHALL revert if `job.provider == address(0)` (provider MUST be set before fundin
 ### Core Functions
 
 - **createJob(provider, evaluator, expiredAt, description, hook?)**
-Called by client. Creates job in Open with `client = msg.sender`, `provider`, `evaluator`, `expiredAt`, `description`, and optional `hook` address. SHALL revert if `evaluator` is zero or `expiredAt` is not in the future. **Provider MAY be zero**; if so, client MUST call `setProvider` before `fund`. `hook` MAY be `address(0)` (no hook). Returns `jobId`.
+Called by client. Creates a **standalone** job in Open with `client = msg.sender`, `provider`, `evaluator`, `expiredAt`, `description`, and optional `hook` address. SHALL revert if `evaluator` is zero or `expiredAt` is not in the future. **Provider MAY be zero**; if so, client MUST call `setProvider` before `fund`. `hook` MAY be `address(0)` (no hook). Returns `jobId`.
+- **createOpenJob(provider, evaluator, expiredAt, description, hook?)**
+OPTIONAL. Called by client. Creates an **Open-phase** job in Open using the same inputs as `createJob(...)`. Returns `jobId`.
+- **createCloseJob(parentJobId, expiredAt, description)**
+OPTIONAL. Called by the parent job's client. Creates a **Close-phase** job linked to `parentJobId`. SHALL revert if the parent job does not exist, is not an Open-phase job, is not yet `Completed`, or already has a linked close job. The close job SHALL inherit the parent job's `client`, `provider`, and `evaluator`. Hooked implementations MAY also inherit the same hook.
 - **setProvider(jobId, provider, optParams?)**
 Called by client. SHALL revert if job is not Open, current `job.provider != address(0)`, or `provider == address(0)`. SHALL set `job.provider = provider`. `optParams` (bytes, OPTIONAL) is forwarded to the hook contract if set (see Hooks).
 - **setBudget(jobId, amount, optParams?)**

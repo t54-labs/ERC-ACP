@@ -56,8 +56,6 @@ contract MCUHookLite is IACPHook {
 
     mapping(uint256 jobId => Profile) internal profiles;
     mapping(bytes32 memoId => uint256 jobId) internal jobIdByMemoId;
-    mapping(uint256 jobId => uint256 parentJobId) internal parentJobIdByJobId;
-    mapping(uint256 jobId => uint256 closeJobId) internal closeJobIdByParentJobId;
 
     event WiringSet(address indexed coordinator, address indexed underwriterEvaluator);
     event ProfileCommitted(
@@ -197,11 +195,19 @@ contract MCUHookLite is IACPHook {
     }
 
     function getParentJobId(uint256 jobId) external view returns (uint256) {
-        return parentJobIdByJobId[jobId];
+        try acp.getParentJobId(jobId) returns (uint256 parentJobId) {
+            return parentJobId;
+        } catch {
+            return 0;
+        }
     }
 
     function getCloseJobId(uint256 jobId) external view returns (uint256) {
-        return closeJobIdByParentJobId[jobId];
+        try acp.getCloseJobId(jobId) returns (uint256 closeJobId) {
+            return closeJobId;
+        } catch {
+            return 0;
+        }
     }
 
     function markProtected(uint256 jobId, address adapter) external onlyCoordinator {
@@ -310,8 +316,6 @@ contract MCUHookLite is IACPHook {
 
         jobIdByMemoId[commit.memoId] = jobId;
         if (commit.parentJobId != 0) {
-            parentJobIdByJobId[jobId] = commit.parentJobId;
-            closeJobIdByParentJobId[commit.parentJobId] = jobId;
             emit ParentJobLinked(jobId, commit.parentJobId, commit.parentMemoId);
         }
 
@@ -427,16 +431,21 @@ contract MCUHookLite is IACPHook {
         MCUTypes.MCUCommit memory commit
     ) internal view returns (MCUTypes.MCUCommit memory) {
         if (commit.parentJobId == jobId) revert InvalidParentJob();
+        if (acp.getJobKind(jobId) != IAgenticCommerceKernel.JobKind.Close) revert InvalidParentJob();
+        if (acp.getParentJobId(jobId) != commit.parentJobId) revert InvalidParentJob();
 
         IAgenticCommerceKernel.Job memory parentJob = acp.getJob(commit.parentJobId);
         if (parentJob.id == 0) revert InvalidParentJob();
+        if (acp.getJobKind(commit.parentJobId) != IAgenticCommerceKernel.JobKind.Open) revert InvalidParentJob();
+        uint256 linkedCloseJobId = acp.getCloseJobId(commit.parentJobId);
+        if (linkedCloseJobId == 0) revert InvalidParentJob();
+        if (linkedCloseJobId != jobId) revert ParentAlreadyHasCloseJob();
         if (parentJob.hook != address(this)) revert ParentHookMismatch();
 
         Profile storage parentProfile = profiles[commit.parentJobId];
         if (!parentProfile.initialized) revert ParentProfileNotCommitted();
         if (parentProfile.commit.parentJobId != 0) revert NestedCloseUnsupported();
-        if (closeJobIdByParentJobId[commit.parentJobId] != 0) revert ParentAlreadyHasCloseJob();
-
+        if (job.hook != address(this)) revert InvalidParentJob();
         if (
             parentJob.client != job.client || parentJob.provider != job.provider
                 || parentJob.evaluator != job.evaluator
@@ -450,6 +459,8 @@ contract MCUHookLite is IACPHook {
         } else if (commit.parentMemoId != parentProfile.commit.memoId) {
             revert ParentMemoMismatch();
         }
+
+        _assertParentReadyForClose(commit.parentJobId);
 
         return commit;
     }

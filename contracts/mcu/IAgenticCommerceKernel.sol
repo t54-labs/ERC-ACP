@@ -11,6 +11,12 @@ interface IAgenticCommerceKernel {
         Expired
     }
 
+    enum JobKind {
+        Standalone,
+        Open,
+        Close
+    }
+
     struct Job {
         uint256 id;
         address client;
@@ -25,6 +31,9 @@ interface IAgenticCommerceKernel {
 
     function paymentToken() external view returns (address);
     function getJob(uint256 jobId) external view returns (Job memory);
+    function getJobKind(uint256 jobId) external view returns (JobKind);
+    function getParentJobId(uint256 jobId) external view returns (uint256);
+    function getCloseJobId(uint256 jobId) external view returns (uint256);
 
     function setProvider(uint256 jobId, address provider, bytes calldata optParams) external;
     function setBudget(uint256 jobId, uint256 amount, bytes calldata optParams) external;

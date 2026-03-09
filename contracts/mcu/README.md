@@ -42,7 +42,8 @@ outside the hook surface as intended by ACP.
 
 ACP remains the job rail:
 
-- `createJob()` creates the job and stores the optional hook.
+- `createOpenJob()` creates the parent open-phase job and stores the optional hook.
+- `createCloseJob()` can later create a linked close-phase job after the parent open job is completed.
 - `setBudget()` commits the MCU profile.
 - `fund()` escrows the provider fee in ACP.
 - `submit()` records the evidence bundle for evaluator review.
@@ -65,7 +66,7 @@ fee, not a merged bucket for premium, principal, bond, and compensation.
 
 A typical MCU-backed job is expected to follow this sequence:
 
-1. `createJob(provider, evaluator = UnderwriterEvaluator, expiredAt, description, hook = MCUHookLite)`
+1. `createOpenJob(provider, evaluator = UnderwriterEvaluator, expiredAt, description, hook = MCUHookLite)`
 2. `setBudget(jobId, serviceFee, abi.encode(MCUTypes.MCUCommit))`
 3. `fund(jobId, serviceFee, optParams)`
 4. `MCUCoordinator.orchestrateFunding(jobId, permit, permitSig)`
@@ -103,7 +104,7 @@ sequenceDiagram
     participant Bond as BondManager
     participant Eval as UnderwriterEvaluator
 
-    Client->>ACP: createJob(provider, evaluator=Eval, hook=Hook)
+    Client->>ACP: createOpenJob(provider, evaluator=Eval, hook=Hook)
     Client->>ACP: setBudget(jobId, serviceFee, abi.encode(MCUCommit))
     ACP->>Hook: beforeAction(jobId, setBudget, data)
     Hook-->>ACP: validate wiring, provider, evaluator, and commit
@@ -272,7 +273,7 @@ sequenceDiagram
     participant Bond as BondManager
     participant Eval as UnderwriterEvaluator
 
-    Client->>ACP: createJob(provider, evaluator=Eval, hook=Hook)
+    Client->>ACP: createOpenJob(provider, evaluator=Eval, hook=Hook)
     Client->>ACP: setBudget(jobId, serviceFee, abi.encode(MCUCommit))
     ACP->>Hook: beforeAction(jobId, setBudget, data)
     Note over Hook: sidecarState = Committed

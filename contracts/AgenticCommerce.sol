@@ -25,6 +25,12 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         Expired
     }
 
+    enum JobKind {
+        Standalone,
+        Open,
+        Close
+    }
+
     struct Job {
         uint256 id;
         address client;
@@ -41,9 +47,13 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
     address public platformTreasury;
 
     mapping(uint256 => Job) public jobs;
+    mapping(uint256 => JobKind) internal jobKindByJobId;
+    mapping(uint256 => uint256) internal parentJobIdByCloseJobId;
+    mapping(uint256 => uint256) internal closeJobIdByParentJobId;
     uint256 public jobCounter;
 
     event JobCreated(uint256 indexed jobId, address indexed client, address indexed provider, address evaluator, uint256 expiredAt);
+    event LinkedJobCreated(uint256 indexed parentJobId, uint256 indexed closeJobId);
     event ProviderSet(uint256 indexed jobId, address indexed provider);
     event BudgetSet(uint256 indexed jobId, uint256 amount);
     event JobFunded(uint256 indexed jobId, address indexed client, uint256 amount);
@@ -62,6 +72,9 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
     error ZeroBudget();
     error BudgetMismatch();
     error ProviderNotSet();
+    error InvalidParentJob();
+    error ParentJobNotCompleted();
+    error CloseJobAlreadyExists();
 
     constructor(address paymentToken_, address treasury_) {
         if (paymentToken_ == address(0) || treasury_ == address(0)) revert ZeroAddress();
@@ -79,12 +92,49 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
     }
 
     function createJob(address provider, address evaluator, uint256 expiredAt, string calldata description) external returns (uint256 jobId) {
+        jobId = _createJob(msg.sender, provider, evaluator, expiredAt, description);
+        jobKindByJobId[jobId] = JobKind.Standalone;
+    }
+
+    function createOpenJob(address provider, address evaluator, uint256 expiredAt, string calldata description)
+        external
+        returns (uint256 jobId)
+    {
+        jobId = _createJob(msg.sender, provider, evaluator, expiredAt, description);
+        jobKindByJobId[jobId] = JobKind.Open;
+    }
+
+    function createCloseJob(uint256 parentJobId, uint256 expiredAt, string calldata description)
+        external
+        returns (uint256 jobId)
+    {
+        Job storage parentJob = jobs[parentJobId];
+        if (parentJob.id == 0 || jobKindByJobId[parentJobId] != JobKind.Open) revert InvalidParentJob();
+        if (msg.sender != parentJob.client) revert Unauthorized();
+        if (parentJob.status != JobStatus.Completed) revert ParentJobNotCompleted();
+        if (closeJobIdByParentJobId[parentJobId] != 0) revert CloseJobAlreadyExists();
+
+        jobId = _createJob(msg.sender, parentJob.provider, parentJob.evaluator, expiredAt, description);
+        jobKindByJobId[jobId] = JobKind.Close;
+        parentJobIdByCloseJobId[jobId] = parentJobId;
+        closeJobIdByParentJobId[parentJobId] = jobId;
+
+        emit LinkedJobCreated(parentJobId, jobId);
+    }
+
+    function _createJob(
+        address client_,
+        address provider,
+        address evaluator,
+        uint256 expiredAt,
+        string calldata description
+    ) internal returns (uint256 jobId) {
         if (evaluator == address(0)) revert ZeroAddress();
         if (expiredAt <= block.timestamp + 5 minutes) revert ExpiryTooShort();
         jobId = ++jobCounter;
         jobs[jobId] = Job({
             id: jobId,
-            client: msg.sender,
+            client: client_,
             provider: provider,
             evaluator: evaluator,
             description: description,
@@ -92,8 +142,7 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
             expiredAt: expiredAt,
             status: JobStatus.Open
         });
-        emit JobCreated(jobId, msg.sender, provider, evaluator, expiredAt);
-        return jobId;
+        emit JobCreated(jobId, client_, provider, evaluator, expiredAt);
     }
 
     /// @dev Client sets provider when job was created with provider == address(0). Must be set before fund.
@@ -194,5 +243,20 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
 
     function getJob(uint256 jobId) external view returns (Job memory) {
         return jobs[jobId];
+    }
+
+    function getJobKind(uint256 jobId) external view returns (JobKind) {
+        if (jobs[jobId].id == 0) revert InvalidJob();
+        return jobKindByJobId[jobId];
+    }
+
+    function getParentJobId(uint256 jobId) external view returns (uint256) {
+        if (jobs[jobId].id == 0) revert InvalidJob();
+        return parentJobIdByCloseJobId[jobId];
+    }
+
+    function getCloseJobId(uint256 jobId) external view returns (uint256) {
+        if (jobs[jobId].id == 0) revert InvalidJob();
+        return closeJobIdByParentJobId[jobId];
     }
 }

@@ -37,8 +37,8 @@ import "../mcu/UnderwriterEvaluator.sol";
  *
  *     and wires the hook to the coordinator + evaluator once.
  *
- *  3. Create an ACP job using the deployed evaluator and hook addresses:
- *       `createJob(provider, address(example.evaluator()), expiredAt, description, address(example.hook()))`
+ *  3. Create an ACP parent open job using the deployed evaluator and hook addresses:
+ *       `createOpenJob(provider, address(example.evaluator()), expiredAt, description, address(example.hook()))`
  *
  *  4. Build the MCU commitment off-chain or via the helper:
  *       `MCUTypes.MCUCommit memory commit = example.buildCommit(inputs);`

@@ -25,7 +25,7 @@ sequenceDiagram
     Provider-->>Client: Return quote and settlement terms
 
     Note over Client,Eval: Phase 1 - Request
-    Client->>ACP: createJob(provider, evaluator=Eval, hook=Hook)
+    Client->>ACP: createOpenJob(provider, evaluator=Eval, hook=Hook)
     Note over Client,Provider: Client creates the JobRequestMemo off-chain
     Client-->>Provider: Share JobRequestMemo for review
     Client->>ACP: setBudget(jobId, serviceFee, abi.encode(MCUCommit))

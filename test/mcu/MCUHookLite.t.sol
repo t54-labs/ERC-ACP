@@ -16,6 +16,9 @@ interface IMCUHookLiteLinkageView {
 contract MockHookACP is IAgenticCommerceKernel {
     address public override paymentToken;
     mapping(uint256 jobId => Job) internal jobs;
+    mapping(uint256 jobId => JobKind) internal jobKinds;
+    mapping(uint256 jobId => uint256) internal parentJobIdByCloseJobId;
+    mapping(uint256 jobId => uint256) internal closeJobIdByParentJobId;
 
     constructor(address paymentToken_) {
         paymentToken = paymentToken_;
@@ -23,6 +26,15 @@ contract MockHookACP is IAgenticCommerceKernel {
 
     function setJob(Job memory job_) external {
         jobs[job_.id] = job_;
+    }
+
+    function setJobKind(uint256 jobId, JobKind kind) external {
+        jobKinds[jobId] = kind;
+    }
+
+    function linkCloseJob(uint256 parentJobId, uint256 closeJobId) external {
+        parentJobIdByCloseJobId[closeJobId] = parentJobId;
+        closeJobIdByParentJobId[parentJobId] = closeJobId;
     }
 
     function callBeforeAction(address hook, uint256 jobId, bytes4 selector, bytes calldata data) external {
@@ -35,6 +47,18 @@ contract MockHookACP is IAgenticCommerceKernel {
 
     function getJob(uint256 jobId) external view override returns (Job memory) {
         return jobs[jobId];
+    }
+
+    function getJobKind(uint256 jobId) external view override returns (JobKind) {
+        return jobKinds[jobId];
+    }
+
+    function getParentJobId(uint256 jobId) external view override returns (uint256) {
+        return parentJobIdByCloseJobId[jobId];
+    }
+
+    function getCloseJobId(uint256 jobId) external view override returns (uint256) {
+        return closeJobIdByParentJobId[jobId];
     }
 
     function setProvider(uint256, address, bytes calldata) external pure override {
@@ -70,6 +94,7 @@ contract MCUHookLiteTest is Test {
     uint256 internal constant OPEN_JOB_ID = 1;
     uint256 internal constant CLOSE_JOB_ID = 2;
     uint256 internal constant BAD_CLOSE_JOB_ID = 3;
+    uint256 internal constant UNLINKED_CLOSE_JOB_ID = 4;
     bytes32 internal constant OPEN_MEMO_ID = keccak256("open-memo-id");
     bytes32 internal constant CLOSE_MEMO_ID = keccak256("close-memo-id");
     bytes32 internal constant SUCCESS_DISPUTE_HASH = keccak256("success-dispute");
@@ -117,10 +142,18 @@ contract MCUHookLiteTest is Test {
         acp.setJob(_job(OPEN_JOB_ID, provider));
         acp.setJob(_job(CLOSE_JOB_ID, provider));
         acp.setJob(_job(BAD_CLOSE_JOB_ID, otherProvider));
+        acp.setJob(_job(UNLINKED_CLOSE_JOB_ID, provider));
+        acp.setJobKind(OPEN_JOB_ID, IAgenticCommerceKernel.JobKind.Open);
+        acp.setJobKind(CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
+        acp.setJobKind(BAD_CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
+        acp.setJobKind(UNLINKED_CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
+        acp.linkCloseJob(OPEN_JOB_ID, CLOSE_JOB_ID);
     }
 
     function testCloseCommitLinksToParentJobAndBackfillsParentMemoId() public {
-        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_MEMO_ID, 0, bytes32(0))));
+        _commitOpenJob();
+        _settleParentOpenJob();
+
         acp.callBeforeAction(
             address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
         );
@@ -140,7 +173,9 @@ contract MCUHookLiteTest is Test {
     }
 
     function testCloseCommitRevertsWhenProviderDiffersFromParent() public {
-        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_MEMO_ID, 0, bytes32(0))));
+        _commitOpenJob();
+        _settleParentOpenJob();
+        acp.linkCloseJob(OPEN_JOB_ID, BAD_CLOSE_JOB_ID);
 
         vm.expectRevert(MCUHookLite.InvalidParentJob.selector);
         acp.callBeforeAction(
@@ -151,36 +186,54 @@ contract MCUHookLiteTest is Test {
         );
     }
 
-    function testCloseFundRevertsUntilParentJobIsCompletedAndSettled() public {
-        _commitOpenAndCloseJobs();
+    function testCloseCommitRevertsWhenACPDoesNotLinkJobToParent() public {
+        _commitOpenJob();
+        _settleParentOpenJob();
 
-        vm.expectRevert(MCUHookLite.InvalidState.selector);
-        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+        vm.expectRevert(MCUHookLite.InvalidParentJob.selector);
+        acp.callBeforeAction(
+            address(hook),
+            UNLINKED_CLOSE_JOB_ID,
+            SEL_SET_BUDGET,
+            _setBudgetData(_commit(keccak256("unlinked-close-memo-id"), OPEN_JOB_ID, bytes32(0)))
+        );
     }
 
-    function testCloseFundRevertsWhenParentJobIsCompletedButNotSettled() public {
-        _commitOpenAndCloseJobs();
+    function testCloseCommitRevertsUntilParentJobIsCompletedAndSettled() public {
+        _commitOpenJob();
+
+        vm.expectRevert(MCUHookLite.InvalidState.selector);
+        acp.callBeforeAction(
+            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
+        );
+    }
+
+    function testCloseCommitRevertsWhenParentJobIsCompletedButNotSettled() public {
+        _commitOpenJob();
         _completeParentOpenJobWithoutSettlement();
 
         vm.expectRevert(MCUHookLite.InvalidState.selector);
-        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+        acp.callBeforeAction(
+            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
+        );
     }
 
     function testCloseFundRevertsWhenParentSidecarSettledButAcpStatusIsNotCompleted() public {
         _commitOpenAndCloseJobs();
-        _settleParentOpenJob();
         acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Funded));
 
         vm.expectRevert(MCUHookLite.InvalidState.selector);
         acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
     }
 
-    function testCloseSubmitRevertsUntilParentJobIsCompletedAndSettled() public {
+    function testCloseSubmitRevertsWhenParentLeavesReadyStateAfterCloseCommit() public {
         _commitOpenAndCloseJobs();
         acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
 
         vm.prank(coordinator);
         hook.markProtected(CLOSE_JOB_ID, adapter);
+
+        acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Funded));
 
         vm.expectRevert(MCUHookLite.InvalidState.selector);
         acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_SUBMIT, bytes(""));
@@ -188,7 +241,6 @@ contract MCUHookLiteTest is Test {
 
     function testCloseFundAndSubmitAllowedOnceParentJobIsCompletedAndSettled() public {
         _commitOpenAndCloseJobs();
-        _settleParentOpenJob();
 
         acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
         acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
@@ -314,8 +366,13 @@ contract MCUHookLiteTest is Test {
         return abi.encode(uint256(1), abi.encode(commit));
     }
 
-    function _commitOpenAndCloseJobs() internal {
+    function _commitOpenJob() internal {
         acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_MEMO_ID, 0, bytes32(0))));
+    }
+
+    function _commitOpenAndCloseJobs() internal {
+        _commitOpenJob();
+        _settleParentOpenJob();
         acp.callBeforeAction(
             address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
         );
