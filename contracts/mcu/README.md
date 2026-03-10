@@ -84,6 +84,19 @@ A typical MCU-backed job is expected to follow this sequence:
 8. Failure / expiry path:
    - reject cleanup via `MCUCoordinator.finalizeRejectedJob(...)`
    - or timeout cleanup via `MCUCoordinator.settleExpiry(...)`
+9. Optional linked close leg (current branch scope):
+   - once the parent open job is `Completed` in ACP and `SuccessSettled` in the
+     MCU sidecar, the client MAY call
+     `createCloseJob(parentJobId, expiredAt, description)`
+   - the client then commits a close-leg `MCUCommit` whose `parentJobId`
+     references the parent open leg
+   - the close leg reuses the same `fund()` ->
+     `MCUCoordinator.orchestrateFunding()` -> `submit()` -> evaluator-decision
+     path as any other MCU-backed ACP job
+
+ACP itself allows `createCloseJob(...)` once the parent open job is
+`Completed`. The additional `SuccessSettled` requirement is currently enforced by
+`MCUHookLite` before it accepts the close-leg MCU profile.
 
 ## Sequence Diagram
 
@@ -313,6 +326,53 @@ sequenceDiagram
     Adapter-->>Provider: forward released bond balance
     Coord->>Hook: markSuccessSettled(jobId)
     Note over Hook: sidecarState = SuccessSettled
+```
+
+### Linked Close Leg
+
+This extension shows how the current branch supports a linked close leg on top
+of the existing MCU machinery. After the parent open leg finishes in ACP and the
+MCU sidecar reaches `SuccessSettled`, the client can create a linked close job.
+That close job inherits the parent `client`, `provider`, `evaluator`, and
+`hook`, then reuses the same protected MCU flow.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    actor Provider
+    actor Underwriter
+    participant ACP as AgenticCommerceHooked
+    participant Hook as MCUHookLite
+    participant Coord as MCUCoordinator
+    participant Eval as UnderwriterEvaluator
+
+    Note over Client,Hook: Parent open leg already reached ACP Completed
+    Note over Client,Hook: Parent open leg sidecar already reached SuccessSettled
+
+    Client->>ACP: createCloseJob(parentJobId, expiredAt, closeDescription)
+    Note over ACP: inherit client, provider, evaluator, and hook
+    Note over ACP: record parentJobId <-> closeJobId linkage
+
+    Client->>ACP: setBudget(closeJobId, closeServiceFee, abi.encode(closeCommit))
+    ACP->>Hook: beforeAction(closeJobId, setBudget, data)
+    Hook-->>ACP: require ACP-linked close job and settled parent
+    Note over Hook: store close-leg memoId and config
+
+    Client->>ACP: fund(closeJobId, closeServiceFee, optParams)
+    ACP->>Hook: beforeAction(closeJobId, fund, data)
+    Hook-->>ACP: require parent still ready for close
+    ACP->>Hook: afterAction(closeJobId, fund, data)
+    Note over Hook: sidecarState = FeeEscrowed
+
+    Client->>Coord: orchestrateFunding(closeJobId, permit, permitSig)
+    Coord->>Hook: markProtected(closeJobId, adapter)
+
+    Provider->>ACP: submit(closeJobId, bundleHash, abi.encode(SubmitEvidence))
+    Underwriter-->>Client: sign CompleteDecision or RejectDecision
+    Client->>Eval: completeBySig(...) or rejectBySig(...)
+
+    Note over Client,Eval: The close leg currently reuses the same MCU success / reject settlement lanes as any other protected job
 ```
 
 ## Sidecar State Model

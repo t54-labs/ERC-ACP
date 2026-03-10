@@ -70,6 +70,35 @@ sequenceDiagram
     Client-->>User: Present latest state
 ```
 
+## Optional Linked Close Job Extension
+
+Implementations that adopt ACP linked two-phase jobs can start a later close or
+evaluation leg after the parent open leg is completed. ACP owns the parent/close
+relationship; the hook still decides any additional close-leg policy checks.
+
+```mermaid
+sequenceDiagram
+    actor User
+    actor Client
+    participant ACP as ACP Core
+    participant Hook as Abstract Hook
+
+    Note over User,Hook: Optional Phase 6 - Linked Close Job
+    User->>Client: Approve close or reevaluation step
+    Client->>ACP: createCloseJob(parentJobId, expiredAt, closeDescription)
+    Note over ACP: inherit parent actors and record linked-job relationship
+
+    Client->>ACP: setBudget(closeJobId, closeBudget, closeOptParams)
+    ACP->>Hook: beforeAction(closeJobId, setBudget, data)
+    Hook-->>ACP: Validate linked-close policy
+    ACP->>Hook: afterAction(closeJobId, setBudget, data)
+
+    Client->>ACP: fund(closeJobId, closeBudget, closeOptParams)
+    ACP->>Hook: beforeAction(closeJobId, fund, data)
+    Hook-->>ACP: Validate close-leg activation
+    ACP->>Hook: afterAction(closeJobId, fund, data)
+```
+
 ## Memo Ownership Summary
 
 - `JobRequestMemo` is created by the `Client` and signed by the `Provider`.

@@ -165,6 +165,52 @@ sequenceDiagram
     Client->>Client: View latest position or execution state
 ```
 
+## Linked Close Job Extension
+
+The diagram above shows the original MCU request / execute / evaluate path for a
+single protected job. In the current `feat/two-phase-jobs` branch, ACP also
+supports a linked close leg. That close leg starts only after the parent open
+leg has reached ACP `Completed`, and `MCUHookLite` further requires the parent
+sidecar to be `SuccessSettled` before it accepts the close-leg MCU profile.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    actor Provider
+    actor Underwriter
+    participant ACP as AgenticCommerceHooked
+    participant Hook as MCUHookLite
+    participant Coord as MCUCoordinator
+    participant Eval as UnderwriterEvaluator
+
+    Note over Client,Hook: Parent open leg already reached Completed + SuccessSettled
+
+    Client->>ACP: createCloseJob(parentJobId, expiredAt, closeDescription)
+    Note over ACP: inherit parent client, provider, evaluator, and hook
+    Note over ACP: store parentJobId <-> closeJobId linkage
+
+    Client->>ACP: setBudget(closeJobId, closeServiceFee, abi.encode(closeCommit))
+    ACP->>Hook: beforeAction(closeJobId, setBudget, data)
+    Hook-->>ACP: verify linked close job and settled parent
+    Note over Hook: commit.parentJobId points at the parent open leg
+
+    Client->>ACP: fund(closeJobId, closeServiceFee, optParams)
+    ACP->>Hook: beforeAction(closeJobId, fund, data)
+    Hook-->>ACP: require parent still ready for close
+    ACP->>Hook: afterAction(closeJobId, fund, data)
+    Note over Hook: close sidecarState = FeeEscrowed
+
+    Client->>Coord: orchestrateFunding(closeJobId, permit, permitSig)
+    Coord->>Hook: markProtected(closeJobId, adapter)
+
+    Provider->>ACP: submit(closeJobId, bundleHash, abi.encode(SubmitEvidence))
+    Underwriter-->>Client: Sign CompleteDecision or RejectDecision
+    Client->>Eval: completeBySig(...) or rejectBySig(...)
+
+    Note over Client,Eval: The close leg currently reuses the same MCU completion / reject / dispute lanes as any other protected job
+```
+
 ## Memo and Signature Summary
 
 - `JobRequestMemo` is created by the `Client` and signed by the `Provider`.
