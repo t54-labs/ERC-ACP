@@ -91,6 +91,8 @@ contract MCUHookLiteTest is Test {
     bytes4 internal constant SEL_FUND = bytes4(keccak256("fund(uint256,uint256,bytes)"));
     bytes4 internal constant SEL_SUBMIT = bytes4(keccak256("submit(uint256,bytes32,bytes)"));
     bytes4 internal constant SEL_COMPLETE = bytes4(keccak256("complete(uint256,bytes32,bytes)"));
+    bytes4 internal constant SEL_REJECT = bytes4(keccak256("reject(uint256,bytes32,bytes)"));
+    uint256 internal constant STATE_AWAITING_CLOSE = 4;
     uint256 internal constant OPEN_JOB_ID = 1;
     uint256 internal constant CLOSE_JOB_ID = 2;
     uint256 internal constant BAD_CLOSE_JOB_ID = 3;
@@ -152,7 +154,7 @@ contract MCUHookLiteTest is Test {
 
     function testCloseCommitLinksToParentJobAndBackfillsParentMemoId() public {
         _commitOpenJob();
-        _settleParentOpenJob();
+        _completeOpenJobReadyForClose();
 
         acp.callBeforeAction(
             address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
@@ -174,7 +176,7 @@ contract MCUHookLiteTest is Test {
 
     function testCloseCommitRevertsWhenProviderDiffersFromParent() public {
         _commitOpenJob();
-        _settleParentOpenJob();
+        _completeOpenJobReadyForClose();
         acp.linkCloseJob(OPEN_JOB_ID, BAD_CLOSE_JOB_ID);
 
         vm.expectRevert(MCUHookLite.InvalidParentJob.selector);
@@ -188,7 +190,7 @@ contract MCUHookLiteTest is Test {
 
     function testCloseCommitRevertsWhenACPDoesNotLinkJobToParent() public {
         _commitOpenJob();
-        _settleParentOpenJob();
+        _completeOpenJobReadyForClose();
 
         vm.expectRevert(MCUHookLite.InvalidParentJob.selector);
         acp.callBeforeAction(
@@ -199,7 +201,7 @@ contract MCUHookLiteTest is Test {
         );
     }
 
-    function testCloseCommitRevertsUntilParentJobIsCompletedAndSettled() public {
+    function testCloseCommitRevertsUntilParentJobIsCompletedAndAwaitingClose() public {
         _commitOpenJob();
 
         vm.expectRevert(MCUHookLite.InvalidState.selector);
@@ -208,9 +210,10 @@ contract MCUHookLiteTest is Test {
         );
     }
 
-    function testCloseCommitRevertsWhenParentJobIsCompletedButNotSettled() public {
+    function testCloseCommitRevertsWhenParentJobIsCompletedButOpenHookDidNotObserveCompletion() public {
         _commitOpenJob();
-        _completeParentOpenJobWithoutSettlement();
+        _protectOpenJob();
+        acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Completed));
 
         vm.expectRevert(MCUHookLite.InvalidState.selector);
         acp.callBeforeAction(
@@ -218,7 +221,7 @@ contract MCUHookLiteTest is Test {
         );
     }
 
-    function testCloseFundRevertsWhenParentSidecarSettledButAcpStatusIsNotCompleted() public {
+    function testCloseFundRevertsWhenParentAwaitingCloseButAcpStatusIsNotCompleted() public {
         _commitOpenAndCloseJobs();
         acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Funded));
 
@@ -239,7 +242,7 @@ contract MCUHookLiteTest is Test {
         acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_SUBMIT, bytes(""));
     }
 
-    function testCloseFundAndSubmitAllowedOnceParentJobIsCompletedAndSettled() public {
+    function testCloseFundAndSubmitAllowedOnceParentJobIsCompletedAndAwaitingClose() public {
         _commitOpenAndCloseJobs();
 
         acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
@@ -251,68 +254,77 @@ contract MCUHookLiteTest is Test {
         acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_SUBMIT, _submitActionData());
     }
 
-    function testOpenJobFundAndSubmitDoNotRequireParentSettlement() public {
+    function testOpenJobCompleteTransitionsToAwaitingCloseWithoutSubmit() public {
         acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_MEMO_ID, 0, bytes32(0))));
+        _completeOpenJobReadyForClose();
 
-        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_FUND, bytes(""));
-        acp.callAfterAction(address(hook), OPEN_JOB_ID, SEL_FUND, bytes(""));
-
-        vm.prank(coordinator);
-        hook.markProtected(OPEN_JOB_ID, adapter);
-
-        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SUBMIT, _submitActionData());
+        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), STATE_AWAITING_CLOSE);
+        assertEq(hook.jobCompletionObservedAt(OPEN_JOB_ID), 0);
     }
 
-    function testCompleteSetsDeliveryConfirmationDeadlineAndAllowsSuccessDisputeOpen() public {
-        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_MEMO_ID, 0, bytes32(0))));
-        acp.callAfterAction(address(hook), OPEN_JOB_ID, SEL_FUND, bytes(""));
+    function testCloseCompleteSetsDeliveryConfirmationDeadlineAndAllowsSuccessDisputeOpen() public {
+        _commitOpenAndCloseJobs();
+        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
 
         vm.prank(coordinator);
-        hook.markProtected(OPEN_JOB_ID, adapter);
+        hook.markProtected(CLOSE_JOB_ID, adapter);
 
-        acp.callAfterAction(address(hook), OPEN_JOB_ID, SEL_SUBMIT, _submitActionData());
-        acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Completed));
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_SUBMIT, _submitActionData());
+        acp.setJob(_job(CLOSE_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Completed));
 
         uint64 completionTime = uint64(block.timestamp);
-        acp.callAfterAction(address(hook), OPEN_JOB_ID, SEL_COMPLETE, _completeActionData());
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_COMPLETE, _completeActionData());
 
-        assertEq(hook.jobCompletionObservedAt(OPEN_JOB_ID), completionTime);
+        assertEq(hook.jobCompletionObservedAt(CLOSE_JOB_ID), completionTime);
         assertEq(
-            hook.jobDeliveryConfirmationDeadline(OPEN_JOB_ID),
+            hook.jobDeliveryConfirmationDeadline(CLOSE_JOB_ID),
             completionTime + _commit(OPEN_MEMO_ID, 0, bytes32(0)).deliveryConfirmationTimeoutWindow
         );
 
         vm.prank(coordinator);
-        hook.markSuccessDisputeOpen(OPEN_JOB_ID, SUCCESS_DISPUTE_HASH);
+        hook.markSuccessDisputeOpen(CLOSE_JOB_ID, SUCCESS_DISPUTE_HASH);
 
-        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessDisputeOpen));
-        assertEq(hook.jobLastSuccessDisputeHash(OPEN_JOB_ID), SUCCESS_DISPUTE_HASH);
+        assertEq(uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessDisputeOpen));
+        assertEq(hook.jobLastSuccessDisputeHash(CLOSE_JOB_ID), SUCCESS_DISPUTE_HASH);
     }
 
-    function testSuccessPendingBondReleaseCanBeEnteredFromSuccessDisputeOpen() public {
-        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_MEMO_ID, 0, bytes32(0))));
-        _completeParentOpenJobWithoutSettlement();
+    function testCloseSuccessPendingBondReleaseCanBeEnteredFromSuccessDisputeOpen() public {
+        _completeCloseJobWithoutSettlement();
 
         vm.startPrank(coordinator);
-        hook.markSuccessDisputeOpen(OPEN_JOB_ID, SUCCESS_DISPUTE_HASH);
-        hook.markSuccessPendingBondRelease(OPEN_JOB_ID);
+        hook.markSuccessDisputeOpen(CLOSE_JOB_ID, SUCCESS_DISPUTE_HASH);
+        hook.markSuccessPendingBondRelease(CLOSE_JOB_ID);
         vm.stopPrank();
 
         assertEq(
-            uint256(hook.jobSidecarState(OPEN_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessPendingBondRelease)
+            uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessPendingBondRelease)
         );
     }
 
-    function testSuccessDisputeCanBeMarkedSlashed() public {
-        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_MEMO_ID, 0, bytes32(0))));
-        _completeParentOpenJobWithoutSettlement();
+    function testCloseSuccessDisputeCanBeMarkedSlashed() public {
+        _completeCloseJobWithoutSettlement();
 
         vm.startPrank(coordinator);
-        hook.markSuccessDisputeOpen(OPEN_JOB_ID, SUCCESS_DISPUTE_HASH);
-        hook.markSuccessSlashed(OPEN_JOB_ID, SUCCESS_DISPUTE_HASH, SLASH_ATTESTATION_HASH);
+        hook.markSuccessDisputeOpen(CLOSE_JOB_ID, SUCCESS_DISPUTE_HASH);
+        hook.markSuccessSlashed(CLOSE_JOB_ID, SUCCESS_DISPUTE_HASH, SLASH_ATTESTATION_HASH);
         vm.stopPrank();
 
-        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessSlashed));
+        assertEq(uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessSlashed));
+    }
+
+    function testCloseRejectAcceptsParentSettlementMemo() public {
+        _commitOpenAndCloseJobs();
+        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+
+        vm.prank(coordinator);
+        hook.markProtected(CLOSE_JOB_ID, adapter);
+
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_SUBMIT, _submitActionData());
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_REJECT, _rejectActionData());
+
+        assertEq(uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.RejectPendingSlash));
     }
 
     function _job(uint256 jobId, address provider_) internal view returns (IAgenticCommerceKernel.Job memory) {
@@ -372,30 +384,36 @@ contract MCUHookLiteTest is Test {
 
     function _commitOpenAndCloseJobs() internal {
         _commitOpenJob();
-        _settleParentOpenJob();
+        _completeOpenJobReadyForClose();
         acp.callBeforeAction(
             address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
         );
     }
 
-    function _settleParentOpenJob() internal {
-        _completeParentOpenJobWithoutSettlement();
-
-        vm.startPrank(coordinator);
-        hook.markSuccessPendingBondRelease(OPEN_JOB_ID);
-        hook.markSuccessSettled(OPEN_JOB_ID);
-        vm.stopPrank();
-    }
-
-    function _completeParentOpenJobWithoutSettlement() internal {
+    function _protectOpenJob() internal {
         acp.callAfterAction(address(hook), OPEN_JOB_ID, SEL_FUND, bytes(""));
 
         vm.prank(coordinator);
         hook.markProtected(OPEN_JOB_ID, adapter);
+    }
 
-        acp.callAfterAction(address(hook), OPEN_JOB_ID, SEL_SUBMIT, _submitActionData());
+    function _completeOpenJobReadyForClose() internal {
+        _protectOpenJob();
         acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Completed));
         acp.callAfterAction(address(hook), OPEN_JOB_ID, SEL_COMPLETE, _completeActionData());
+    }
+
+    function _completeCloseJobWithoutSettlement() internal {
+        _commitOpenAndCloseJobs();
+        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+
+        vm.prank(coordinator);
+        hook.markProtected(CLOSE_JOB_ID, adapter);
+
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_SUBMIT, _submitActionData());
+        acp.setJob(_job(CLOSE_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Completed));
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_COMPLETE, _completeActionData());
     }
 
     function _submitActionData() internal pure returns (bytes memory) {
@@ -417,5 +435,18 @@ contract MCUHookLiteTest is Test {
 
     function _completeActionData() internal pure returns (bytes memory) {
         return abi.encode(keccak256("complete-reason"), bytes(""));
+    }
+
+    function _rejectActionData() internal pure returns (bytes memory) {
+        return abi.encode(
+            keccak256("reject-reason"),
+            abi.encode(
+                MCUTypes.RejectContext({
+                    memoId: OPEN_MEMO_ID,
+                    slashAttestationHash: bytes32(0),
+                    reasonCode: keccak256("reject-reason")
+                })
+            )
+        );
     }
 }

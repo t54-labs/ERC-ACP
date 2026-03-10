@@ -10,6 +10,7 @@ import "./mocks/MockERC20.sol";
 error InvalidParentJob();
 error ParentJobNotCompleted();
 error CloseJobAlreadyExists();
+error SubmitNotAllowedForOpenJob();
 
 interface ITwoPhaseAgenticCommerce {
     enum JobKind {
@@ -143,6 +144,125 @@ contract AgenticCommerceTwoPhaseTest is Test {
         assertEq(closeJob.evaluator, openJob.evaluator);
     }
 
+    function testOpenJobCanCompleteDirectlyFromFundedWithoutSubmit() public {
+        vm.startPrank(client);
+        uint256 openJobId = twoPhaseAcp.createOpenJob(provider, evaluator, block.timestamp + 1 days, "open yield position");
+        acp.setBudget(openJobId, JOB_BUDGET);
+        token.approve(address(acp), JOB_BUDGET);
+        acp.fund(openJobId, JOB_BUDGET);
+        vm.stopPrank();
+
+        vm.prank(evaluator);
+        acp.complete(openJobId, keccak256("principal-deployed"));
+
+        AgenticCommerce.Job memory openJob = acp.getJob(openJobId);
+        assertEq(uint256(openJob.status), uint256(AgenticCommerce.JobStatus.Completed));
+    }
+
+    function testHookedOpenJobCanCompleteDirectlyFromFundedWithoutSubmit() public {
+        vm.startPrank(client);
+        uint256 openJobId = twoPhaseHookedAcp.createOpenJob(
+            provider, evaluator, block.timestamp + 1 days, "open yield position", address(noopHook)
+        );
+        hookedAcp.setBudget(openJobId, JOB_BUDGET, bytes(""));
+        token.approve(address(hookedAcp), JOB_BUDGET);
+        hookedAcp.fund(openJobId, JOB_BUDGET, bytes(""));
+        vm.stopPrank();
+
+        vm.prank(evaluator);
+        hookedAcp.complete(openJobId, keccak256("principal-deployed"), bytes(""));
+
+        AgenticCommerceHooked.Job memory openJob = hookedAcp.getJob(openJobId);
+        assertEq(uint256(openJob.status), uint256(AgenticCommerceHooked.JobStatus.Completed));
+    }
+
+    function testOpenJobSubmitRevertsForPlainACP() public {
+        vm.startPrank(client);
+        uint256 openJobId = twoPhaseAcp.createOpenJob(provider, evaluator, block.timestamp + 1 days, "open yield position");
+        acp.setBudget(openJobId, JOB_BUDGET);
+        token.approve(address(acp), JOB_BUDGET);
+        acp.fund(openJobId, JOB_BUDGET);
+        vm.stopPrank();
+
+        vm.expectRevert(SubmitNotAllowedForOpenJob.selector);
+        vm.prank(provider);
+        acp.submit(openJobId, keccak256("should-not-submit"));
+    }
+
+    function testOpenJobSubmitRevertsForHookedACP() public {
+        vm.startPrank(client);
+        uint256 openJobId = twoPhaseHookedAcp.createOpenJob(
+            provider, evaluator, block.timestamp + 1 days, "open yield position", address(noopHook)
+        );
+        hookedAcp.setBudget(openJobId, JOB_BUDGET, bytes(""));
+        token.approve(address(hookedAcp), JOB_BUDGET);
+        hookedAcp.fund(openJobId, JOB_BUDGET, bytes(""));
+        vm.stopPrank();
+
+        vm.expectRevert(SubmitNotAllowedForOpenJob.selector);
+        vm.prank(provider);
+        hookedAcp.submit(openJobId, keccak256("should-not-submit"), bytes(""));
+    }
+
+    function testCloseJobStillRequiresSubmitBeforeComplete() public {
+        uint256 openJobId = _createAndCompleteOpenJob();
+
+        vm.prank(client);
+        uint256 closeJobId = twoPhaseAcp.createCloseJob(openJobId, block.timestamp + 2 days, "close yield position");
+
+        vm.startPrank(client);
+        acp.setBudget(closeJobId, JOB_BUDGET / 2);
+        token.approve(address(acp), JOB_BUDGET / 2);
+        acp.fund(closeJobId, JOB_BUDGET / 2);
+        vm.stopPrank();
+
+        vm.expectRevert(abi.encodeWithSelector(AgenticCommerce.WrongStatus.selector));
+        vm.prank(evaluator);
+        acp.complete(closeJobId, keccak256("close-complete"));
+    }
+
+    function testCreateCloseJobAllowsReplacementAfterRejectedCloseRequest() public {
+        uint256 openJobId = _createAndCompleteOpenJob();
+
+        vm.prank(client);
+        uint256 firstCloseJobId = twoPhaseAcp.createCloseJob(openJobId, block.timestamp + 2 days, "close yield position");
+
+        vm.prank(client);
+        acp.reject(firstCloseJobId, keccak256("cancel close request"));
+
+        vm.prank(client);
+        uint256 replacementCloseJobId =
+            twoPhaseAcp.createCloseJob(openJobId, block.timestamp + 3 days, "replacement close request");
+
+        assertTrue(replacementCloseJobId != firstCloseJobId);
+        assertEq(twoPhaseAcp.getCloseJobId(openJobId), replacementCloseJobId);
+        assertEq(twoPhaseAcp.getParentJobId(replacementCloseJobId), openJobId);
+    }
+
+    function testCreateCloseJobAllowsReplacementAfterExpiredCloseRequest() public {
+        uint256 openJobId = _createAndCompleteOpenJob();
+
+        vm.prank(client);
+        uint256 firstCloseJobId = twoPhaseAcp.createCloseJob(openJobId, block.timestamp + 1 days, "close yield position");
+
+        vm.startPrank(client);
+        acp.setBudget(firstCloseJobId, JOB_BUDGET / 2);
+        token.approve(address(acp), JOB_BUDGET / 2);
+        acp.fund(firstCloseJobId, JOB_BUDGET / 2);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 2 days);
+        acp.claimRefund(firstCloseJobId);
+
+        vm.prank(client);
+        uint256 replacementCloseJobId =
+            twoPhaseAcp.createCloseJob(openJobId, block.timestamp + 3 days, "replacement close request");
+
+        assertTrue(replacementCloseJobId != firstCloseJobId);
+        assertEq(twoPhaseAcp.getCloseJobId(openJobId), replacementCloseJobId);
+        assertEq(twoPhaseAcp.getParentJobId(replacementCloseJobId), openJobId);
+    }
+
     function _createAndCompleteOpenJob() internal returns (uint256 openJobId) {
         vm.startPrank(client);
         openJobId = twoPhaseAcp.createOpenJob(provider, evaluator, block.timestamp + 1 days, "open yield position");
@@ -151,11 +271,8 @@ contract AgenticCommerceTwoPhaseTest is Test {
         acp.fund(openJobId, JOB_BUDGET);
         vm.stopPrank();
 
-        vm.prank(provider);
-        acp.submit(openJobId, keccak256("open-position-deliverable"));
-
         vm.prank(evaluator);
-        acp.complete(openJobId, keccak256("position-opened"));
+        acp.complete(openJobId, keccak256("principal-deployed"));
     }
 
     function _createAndCompleteHookedOpenJob() internal returns (uint256 openJobId) {
@@ -168,10 +285,7 @@ contract AgenticCommerceTwoPhaseTest is Test {
         hookedAcp.fund(openJobId, JOB_BUDGET, bytes(""));
         vm.stopPrank();
 
-        vm.prank(provider);
-        hookedAcp.submit(openJobId, keccak256("open-position-deliverable"), bytes(""));
-
         vm.prank(evaluator);
-        hookedAcp.complete(openJobId, keccak256("position-opened"), bytes(""));
+        hookedAcp.complete(openJobId, keccak256("principal-deployed"), bytes(""));
     }
 }

@@ -10,6 +10,13 @@ import "../../contracts/mcu/MCUTypes.sol";
 contract MockEvaluatorACP is IAgenticCommerceKernel {
     address public override paymentToken;
     Job internal job;
+    JobKind internal jobKind;
+    bool public completeCalled;
+    bool public rejectCalled;
+    uint256 public lastCompletedJobId;
+    uint256 public lastRejectedJobId;
+    bytes32 public lastCompleteReason;
+    bytes32 public lastRejectReason;
 
     constructor(address paymentToken_) {
         paymentToken = paymentToken_;
@@ -23,8 +30,12 @@ contract MockEvaluatorACP is IAgenticCommerceKernel {
         return job;
     }
 
-    function getJobKind(uint256) external pure override returns (JobKind) {
-        return JobKind.Standalone;
+    function setJobKind(JobKind kind) external {
+        jobKind = kind;
+    }
+
+    function getJobKind(uint256) external view override returns (JobKind) {
+        return jobKind;
     }
 
     function getParentJobId(uint256) external pure override returns (uint256) {
@@ -51,12 +62,16 @@ contract MockEvaluatorACP is IAgenticCommerceKernel {
         revert("unused");
     }
 
-    function complete(uint256, bytes32, bytes calldata) external pure override {
-        revert("unused");
+    function complete(uint256 jobId, bytes32 reason, bytes calldata) external override {
+        completeCalled = true;
+        lastCompletedJobId = jobId;
+        lastCompleteReason = reason;
     }
 
-    function reject(uint256, bytes32, bytes calldata) external pure override {
-        revert("unused");
+    function reject(uint256 jobId, bytes32 reason, bytes calldata) external override {
+        rejectCalled = true;
+        lastRejectedJobId = jobId;
+        lastRejectReason = reason;
     }
 }
 
@@ -109,6 +124,11 @@ contract MockSuccessDisputeCoordinator {
 }
 
 contract UnderwriterEvaluatorTest is Test {
+    bytes32 internal constant COMPLETE_TYPEHASH =
+        keccak256("CompleteDecision(uint256 jobId,bytes32 memoId,bytes32 reason,uint64 deadline,uint256 nonce)");
+    bytes32 internal constant REJECT_TYPEHASH = keccak256(
+        "RejectDecision(uint256 jobId,bytes32 memoId,bytes32 reason,bytes32 slashAttestationHash,uint64 deadline,uint256 nonce)"
+    );
     bytes32 internal constant SUCCESS_DISPUTE_TYPEHASH = keccak256(
         "SuccessDisputeDecision(uint256 jobId,bytes32 memoId,bytes32 disputeHash,uint8 outcome,bytes32 reason,bytes32 slashAttestationHash,uint64 deadline,uint256 nonce)"
     );
@@ -152,6 +172,71 @@ contract UnderwriterEvaluatorTest is Test {
         );
 
         hook.seed(underwriter, MEMO_ID, MCUTypes.SidecarState.SuccessDisputeOpen);
+    }
+
+    function testCompleteBySigAllowsOpenJobsFromFundedWithoutSubmit() public {
+        acp.setJob(
+            IAgenticCommerceKernel.Job({
+                id: JOB_ID,
+                client: client,
+                provider: provider,
+                evaluator: address(evaluator),
+                hook: address(hook),
+                description: "open mcu job",
+                budget: 1,
+                expiredAt: block.timestamp + 1 days,
+                status: IAgenticCommerceKernel.JobStatus.Funded
+            })
+        );
+        acp.setJobKind(IAgenticCommerceKernel.JobKind.Open);
+        hook.seed(underwriter, MEMO_ID, MCUTypes.SidecarState.Protected);
+
+        UnderwriterEvaluator.CompleteDecision memory decision = UnderwriterEvaluator.CompleteDecision({
+            jobId: JOB_ID,
+            memoId: MEMO_ID,
+            reason: keccak256("principal-deployed"),
+            deadline: uint64(block.timestamp + 1 days),
+            nonce: 11
+        });
+
+        evaluator.completeBySig(decision, _signCompleteDecision(decision));
+
+        assertTrue(acp.completeCalled());
+        assertEq(acp.lastCompletedJobId(), JOB_ID);
+        assertEq(acp.lastCompleteReason(), decision.reason);
+    }
+
+    function testRejectBySigAllowsOpenJobsFromFundedWithoutSubmit() public {
+        acp.setJob(
+            IAgenticCommerceKernel.Job({
+                id: JOB_ID,
+                client: client,
+                provider: provider,
+                evaluator: address(evaluator),
+                hook: address(hook),
+                description: "open mcu job",
+                budget: 1,
+                expiredAt: block.timestamp + 1 days,
+                status: IAgenticCommerceKernel.JobStatus.Funded
+            })
+        );
+        acp.setJobKind(IAgenticCommerceKernel.JobKind.Open);
+        hook.seed(underwriter, MEMO_ID, MCUTypes.SidecarState.Protected);
+
+        UnderwriterEvaluator.RejectDecision memory decision = UnderwriterEvaluator.RejectDecision({
+            jobId: JOB_ID,
+            memoId: MEMO_ID,
+            reason: keccak256("deployment-rejected"),
+            slashAttestationHash: bytes32(0),
+            deadline: uint64(block.timestamp + 1 days),
+            nonce: 12
+        });
+
+        evaluator.rejectBySig(decision, _signRejectDecision(decision));
+
+        assertTrue(acp.rejectCalled());
+        assertEq(acp.lastRejectedJobId(), JOB_ID);
+        assertEq(acp.lastRejectReason(), decision.reason);
     }
 
     function testResolveSuccessDisputeBySigCallsCoordinatorForReleaseDecision() public {
@@ -265,15 +350,7 @@ contract UnderwriterEvaluatorTest is Test {
         view
         returns (bytes memory)
     {
-        bytes32 domainSeparator = keccak256(
-            abi.encode(
-                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-                keccak256(bytes("MCU Underwriter Evaluator")),
-                keccak256(bytes("1")),
-                block.chainid,
-                address(evaluator)
-            )
-        );
+        bytes32 domainSeparator = _domainSeparator();
         bytes32 structHash = keccak256(
             abi.encode(
                 SUCCESS_DISPUTE_TYPEHASH,
@@ -290,5 +367,48 @@ contract UnderwriterEvaluatorTest is Test {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(underwriterPk, digest);
         return abi.encodePacked(r, s, v);
+    }
+
+    function _signCompleteDecision(UnderwriterEvaluator.CompleteDecision memory decision) internal view returns (bytes memory) {
+        bytes32 domainSeparator = _domainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                COMPLETE_TYPEHASH, decision.jobId, decision.memoId, decision.reason, decision.deadline, decision.nonce
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(underwriterPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _signRejectDecision(UnderwriterEvaluator.RejectDecision memory decision) internal view returns (bytes memory) {
+        bytes32 domainSeparator = _domainSeparator();
+        bytes32 structHash = keccak256(
+            abi.encode(
+                REJECT_TYPEHASH,
+                decision.jobId,
+                decision.memoId,
+                decision.reason,
+                decision.slashAttestationHash,
+                decision.deadline,
+                decision.nonce
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(underwriterPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _domainSeparator() internal view returns (bytes32) {
+        bytes32 domainSeparator = keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("MCU Underwriter Evaluator")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(evaluator)
+            )
+        );
+        return domainSeparator;
     }
 }

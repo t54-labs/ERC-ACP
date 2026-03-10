@@ -7,6 +7,8 @@ hook with the concrete MCU hook system used in this repository:
 In this MCU flow, the end user and the ACP client are the same identity, so the
 diagram uses a single `Client` actor.
 
+## Open Leg
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -24,154 +26,36 @@ sequenceDiagram
     Client->>Provider: Request quote and execution terms
     Provider-->>Client: Return quote and settlement terms
 
-    Note over Client,Eval: Phase 1 - Request
+    Note over Client,Eval: Phase 1 - Open Request
     Client->>ACP: createOpenJob(provider, evaluator=Eval, hook=Hook)
-    Note over Client,Provider: Client creates the JobRequestMemo off-chain
-    Client-->>Provider: Share JobRequestMemo for review
-    Client->>ACP: setBudget(jobId, serviceFee, abi.encode(MCUCommit))
-    ACP->>Hook: beforeAction(jobId, setBudget, data)
-    Hook-->>ACP: Validate wiring, provider, evaluator, and MCUCommit
-    ACP->>Hook: afterAction(jobId, setBudget, data)
-    Note over Hook: Store memoId, underwriter, policyHash
+    Client->>ACP: setBudget(openJobId, serviceFee, abi.encode(openCommit))
+    ACP->>Hook: beforeAction(openJobId, setBudget, data)
     Note over Hook: sidecarState = Committed
 
-    Note over Client,Eval: Phase 2 - Negotiation
-    Provider-->>Client: Sign JobRequestMemo
-    Note over Provider,Client: Provider signs the client-authored request memo
-    Provider-->>Client: Create PayableRequestMemo
-    Note over Provider,Client: Provider authors the payable terms
-    Underwriter-->>Client: Sign UnderwritePermit for BondManager
-    Note over Underwriter,Client: Permit is bound to memoId, jobId, bond, principal, unlockAt, and policyHash
-
-    Note over Client,Eval: Phase 3 - Transaction
-    Client-->>Provider: Sign PayableRequestMemo
-    Note over Client,Provider: Client accepts the provider-authored payable memo
-    Client->>ACP: fund(jobId, serviceFee, optParams)
-    ACP->>Hook: beforeAction(jobId, fund, data)
-    Hook-->>ACP: Require sidecarState = Committed
-    ACP->>Hook: afterAction(jobId, fund, data)
+    Note over Client,Eval: Phase 2 - Funding and Protection
+    Client->>ACP: fund(openJobId, serviceFee, optParams)
+    ACP->>Hook: afterAction(openJobId, fund, data)
     Note over Hook: sidecarState = FeeEscrowed
 
-    Client->>Coord: orchestrateFunding(jobId, permit, permitSig)
-    Coord->>ACP: getJob(jobId)
-    Coord->>Hook: getCommit(jobId) + jobSidecarState(jobId)
-    alt adapter does not exist yet
-        Coord->>Adapter: new MCUJobAdapter(paymentToken, Bond, controller)
-        Coord->>Adapter: configure(jobId, client, provider, memoId, merchantExecutionWallet)
-    else adapter already exists
-        Coord->>Hook: jobAdapter(jobId)
-    end
+    Client->>Coord: orchestrateFunding(openJobId, permit, permitSig)
     Coord->>Adapter: pullBondFromProvider(requiredBondUsdc)
-    opt releasePrincipal == true
-        Coord->>Adapter: pullPrincipalFromClient(fundedPrincipalUsdc)
-    end
-    Coord->>Adapter: lockBond(permit, permitSig)
-    Adapter->>Bond: lockBond(permit, permit.user, permit.unlockAt, permitSig)
-    opt releasePrincipal == true
-        Coord->>Adapter: releasePrincipal(permit, permitSig)
-        Adapter->>Bond: releasePrincipalToMerchant(permit, permitSig)
-    end
-    Coord->>Hook: markProtected(jobId, adapter)
+    Coord->>Adapter: pullPrincipalFromClient(fundedPrincipalUsdc)
+    Adapter->>Bond: lockBond(permit, permit.user, unlockAt, permitSig)
+    Adapter->>Bond: releasePrincipalToMerchant(permit, permitSig)
+    Coord->>Hook: markProtected(openJobId, adapter)
     Note over Hook: sidecarState = Protected
-    ACP-->>Provider: ACP fee escrowed and MCU protection active
+    Note over Provider,Bond: principal is deployed to merchantExecutionWallet
 
-    Note over Client,Eval: Phase 4 - Execution and Evaluation
-    Provider->>Provider: Execute service via merchantExecutionWallet
-    Provider->>ACP: submit(jobId, bundleHash, abi.encode(SubmitEvidence))
-    ACP->>Hook: beforeAction(jobId, submit, data)
-    Hook-->>ACP: Require sidecarState = Protected
-    ACP->>Hook: afterAction(jobId, submit, data)
-    Note over Hook: Record evidence and set sidecarState = EvidenceSubmitted
-
-    alt underwriter approves completion
-        Underwriter-->>Client: Sign CompleteDecision
-        Client->>Eval: completeBySig(decision, sig)
-        Eval->>Hook: jobUnderwriter(jobId) + jobMemoId(jobId)
-        Eval->>Eval: Verify signer, memoId, deadline, and nonce
-        Eval->>ACP: complete(jobId, reason, abi.encode(CompleteContext))
-        ACP->>Hook: beforeAction(jobId, complete, data)
-        ACP->>Hook: afterAction(jobId, complete, data)
-        Note over Hook: sidecarState = SuccessPendingConfirmation
-        ACP-->>Provider: Release net ACP payment on complete()
-
-        Note over Client,Eval: Phase 5 - Delivery Confirmation and Settlement
-        alt client confirms before delivery-confirmation timeout
-            Note over Client: Client confirms delivery in its own UI or workflow
-            Client->>Coord: confirmDelivery(jobId, deliveryNonce, deliverySig)
-            Coord->>Adapter: confirmDeliveryBySig(deliveryNonce, deliverySig)
-            Adapter->>Bond: confirmDeliveryBySig(memoId, deliveryNonce, deliverySig)
-            Coord->>Hook: markSuccessPendingBondRelease(jobId)
-            Note over Hook: sidecarState = SuccessPendingBondRelease
-
-            Note over Client,Coord: After unlockAt
-            Client->>Coord: releaseBond(jobId)
-            Coord->>Adapter: releaseBondAndForward()
-            Adapter->>Bond: releaseBond(memoId)
-            Adapter-->>Provider: Forward released bond balance
-            Coord->>Hook: markSuccessSettled(jobId)
-            Note over Hook: sidecarState = SuccessSettled
-
-        else provider opens success dispute after timeout
-            Provider->>Coord: openSuccessDispute(jobId, disputeHash)
-            Coord->>Hook: jobDeliveryConfirmationDeadline(jobId)
-            Coord->>Hook: markSuccessDisputeOpen(jobId, disputeHash)
-            Note over Hook: sidecarState = SuccessDisputeOpen
-
-            Underwriter-->>Provider: Sign SuccessDisputeDecision
-            Provider->>Eval: resolveSuccessDisputeBySig(decision, attestation, slashSig, sig)
-            Eval->>Hook: jobUnderwriter(jobId) + jobMemoId(jobId) + jobSidecarState(jobId)
-            Eval->>Eval: Verify signer, memoId, dispute hash, deadline, and nonce
-            Eval->>Coord: applySuccessDisputeDecision(decision, attestation, slashSig)
-
-            alt dispute outcome releases bond
-                Coord->>Hook: markSuccessPendingBondRelease(jobId)
-                Note over Hook: sidecarState = SuccessPendingBondRelease
-
-                Note over Provider,Coord: After unlockAt
-                Provider->>Coord: releaseBond(jobId)
-                Coord->>Adapter: releaseBondAndForward()
-                Adapter->>Bond: releaseBond(memoId)
-                Adapter-->>Provider: Forward released bond balance
-                Coord->>Hook: markSuccessSettled(jobId)
-                Note over Hook: sidecarState = SuccessSettled
-
-            else dispute outcome slashes bond
-                Coord->>Adapter: slashBond(attestation, slashSig)
-                Adapter->>Bond: slash(attestation, slashSig)
-                Coord->>Hook: markSuccessSlashed(jobId, disputeHash, slashAttestationHash)
-                Note over Hook: sidecarState = SuccessSlashed
-            end
-        end
-
-    else underwriter rejects
-        Underwriter-->>Client: Sign RejectDecision
-        Client->>Eval: rejectBySig(decision, sig)
-        Eval->>Hook: jobUnderwriter(jobId) + jobMemoId(jobId)
-        Eval->>Eval: Verify signer, memoId, deadline, and nonce
-        Eval->>ACP: reject(jobId, reason, abi.encode(RejectContext))
-        ACP->>Hook: beforeAction(jobId, reject, data)
-        ACP->>Hook: afterAction(jobId, reject, data)
-        Note over Hook: sidecarState = RejectPendingSlash
-
-        Client->>Coord: finalizeRejectedJob(jobId)
-        Coord->>Adapter: sweepResidualToProvider()
-        Adapter-->>Provider: Return residual adapter balance
-        Coord->>Hook: markRejectSettled(jobId)
-        Note over Hook: sidecarState = RejectSettled
-    end
-
-    Note over Client,Eval: Post Completion
-    Provider-->>Client: Optional status update or new quote
-    Client->>Client: View latest position or execution state
+    Note over Client,Eval: Phase 3 - Open Completion
+    Underwriter-->>Client: Sign CompleteDecision(open attestation)
+    Client->>Eval: completeBySig(decision, sig)
+    Eval->>ACP: complete(openJobId, reason, abi.encode(CompleteContext))
+    ACP->>Hook: afterAction(openJobId, complete, data)
+    Note over Hook: sidecarState = AwaitingClose
+    Note over Client,Provider: bond remains locked; no final deliverable yet
 ```
 
 ## Linked Close Job Extension
-
-The diagram above shows the original MCU request / execute / evaluate path for a
-single protected job. In the current `feat/two-phase-jobs` branch, ACP also
-supports a linked close leg. That close leg starts only after the parent open
-leg has reached ACP `Completed`, and `MCUHookLite` further requires the parent
-sidecar to be `SuccessSettled` before it accepts the close-leg MCU profile.
 
 ```mermaid
 sequenceDiagram
@@ -182,33 +66,57 @@ sequenceDiagram
     participant ACP as AgenticCommerceHooked
     participant Hook as MCUHookLite
     participant Coord as MCUCoordinator
+    participant Adapter as MCUJobAdapter
+    participant Bond as BondManager
     participant Eval as UnderwriterEvaluator
 
-    Note over Client,Hook: Parent open leg already reached Completed + SuccessSettled
-
+    Note over Client,Hook: Parent open leg already reached Completed + AwaitingClose
     Client->>ACP: createCloseJob(parentJobId, expiredAt, closeDescription)
     Note over ACP: inherit parent client, provider, evaluator, and hook
-    Note over ACP: store parentJobId <-> closeJobId linkage
 
     Client->>ACP: setBudget(closeJobId, closeServiceFee, abi.encode(closeCommit))
     ACP->>Hook: beforeAction(closeJobId, setBudget, data)
-    Hook-->>ACP: verify linked close job and settled parent
-    Note over Hook: commit.parentJobId points at the parent open leg
+    Hook-->>ACP: verify linked close job and parent readiness
 
     Client->>ACP: fund(closeJobId, closeServiceFee, optParams)
-    ACP->>Hook: beforeAction(closeJobId, fund, data)
-    Hook-->>ACP: require parent still ready for close
     ACP->>Hook: afterAction(closeJobId, fund, data)
     Note over Hook: close sidecarState = FeeEscrowed
 
-    Client->>Coord: orchestrateFunding(closeJobId, permit, permitSig)
+    Client->>Coord: orchestrateFunding(closeJobId, unusedPermit, unusedSig)
+    Coord->>Adapter: configure close-leg settlement adapter with parent memo
     Coord->>Hook: markProtected(closeJobId, adapter)
+    Note over Hook: close sidecarState = Protected
 
     Provider->>ACP: submit(closeJobId, bundleHash, abi.encode(SubmitEvidence))
-    Underwriter-->>Client: Sign CompleteDecision or RejectDecision
-    Client->>Eval: completeBySig(...) or rejectBySig(...)
+    ACP->>Hook: afterAction(closeJobId, submit, data)
+    Note over Hook: close sidecarState = EvidenceSubmitted
 
-    Note over Client,Eval: The close leg currently reuses the same MCU completion / reject / dispute lanes as any other protected job
+    alt underwriter approves close deliverable
+        Underwriter-->>Client: Sign CompleteDecision
+        Client->>Eval: completeBySig(decision, sig)
+        Eval->>ACP: complete(closeJobId, reason, abi.encode(CompleteContext))
+        ACP->>Hook: afterAction(closeJobId, complete, data)
+        Note over Hook: close sidecarState = SuccessPendingConfirmation
+
+        alt client confirms final delivery
+            Client->>Coord: confirmDelivery(closeJobId, deliveryNonce, deliverySig)
+            Adapter->>Bond: confirmDeliveryBySig(parentMemoId, deliveryNonce, deliverySig)
+            Client->>Coord: releaseBond(closeJobId)
+            Adapter->>Bond: releaseBond(parentMemoId)
+            Coord->>Hook: markSuccessSettled(closeJobId)
+        else provider opens dispute after timeout
+            Provider->>Coord: openSuccessDispute(closeJobId, disputeHash)
+            Underwriter-->>Provider: Sign SuccessDisputeDecision
+            Provider->>Eval: resolveSuccessDisputeBySig(decision, attestation, slashSig, sig)
+            Eval->>Coord: applySuccessDisputeDecision(decision, attestation, slashSig)
+        end
+
+    else underwriter rejects close deliverable
+        Underwriter-->>Client: Sign RejectDecision
+        Client->>Eval: rejectBySig(decision, sig)
+        Eval->>ACP: reject(closeJobId, reason, abi.encode(RejectContext))
+        Client->>Coord: finalizeRejectedJob(closeJobId)
+    end
 ```
 
 ## Memo and Signature Summary
@@ -218,7 +126,7 @@ sequenceDiagram
 - `MCUCommit` is committed on-chain by the `Client` during `setBudget(...)`.
 - `UnderwritePermit` and `permitSig` are used by `MCUCoordinator`,
   `MCUJobAdapter`, and `BondManager` to lock the provider bond and optionally
-  release principal.
+  deploy principal.
 - `CompleteDecision`, `RejectDecision`, and `SuccessDisputeDecision` are signed
   by the `Underwriter` and verified by `UnderwriterEvaluator`.
 

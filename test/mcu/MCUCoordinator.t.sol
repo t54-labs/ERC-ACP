@@ -13,30 +13,42 @@ import "../mocks/MockERC20.sol";
 
 contract MockCoordinatorACP is IAgenticCommerceKernel {
     address public override paymentToken;
-    Job internal job;
+    mapping(uint256 jobId => Job) internal jobs;
+    mapping(uint256 jobId => JobKind) internal jobKinds;
+    mapping(uint256 jobId => uint256) internal parentJobIdByCloseJobId;
+    mapping(uint256 jobId => uint256) internal closeJobIdByParentJobId;
 
     constructor(address paymentToken_) {
         paymentToken = paymentToken_;
     }
 
     function setJob(Job memory job_) external {
-        job = job_;
+        jobs[job_.id] = job_;
     }
 
-    function getJob(uint256) external view override returns (Job memory) {
-        return job;
+    function setJobKind(uint256 jobId, JobKind kind) external {
+        jobKinds[jobId] = kind;
     }
 
-    function getJobKind(uint256) external pure override returns (JobKind) {
-        return JobKind.Standalone;
+    function linkCloseJob(uint256 parentJobId, uint256 closeJobId) external {
+        parentJobIdByCloseJobId[closeJobId] = parentJobId;
+        closeJobIdByParentJobId[parentJobId] = closeJobId;
     }
 
-    function getParentJobId(uint256) external pure override returns (uint256) {
-        return 0;
+    function getJob(uint256 jobId) external view override returns (Job memory) {
+        return jobs[jobId];
     }
 
-    function getCloseJobId(uint256) external pure override returns (uint256) {
-        return 0;
+    function getJobKind(uint256 jobId) external view override returns (JobKind) {
+        return jobKinds[jobId];
+    }
+
+    function getParentJobId(uint256 jobId) external view override returns (uint256) {
+        return parentJobIdByCloseJobId[jobId];
+    }
+
+    function getCloseJobId(uint256 jobId) external view override returns (uint256) {
+        return closeJobIdByParentJobId[jobId];
     }
 
     function setProvider(uint256, address, bytes calldata) external pure override {
@@ -69,6 +81,7 @@ contract MockCoordinatorHook {
     bool public markSuccessPendingBondReleaseCalled;
     bool public markSuccessDisputeOpenCalled;
     bool public markSuccessSlashedCalled;
+    bool public markExpirySettledCalled;
     uint256 public lastMarkedJobId;
     address public lastMarkedAdapter;
     uint64 public completionObservedAt;
@@ -114,7 +127,11 @@ contract MockCoordinatorHook {
     }
 
     function jobMemoId(uint256 jobId) external view returns (bytes32) {
-        return commits[jobId].memoId;
+        MCUTypes.MCUCommit memory commit = commits[jobId];
+        if (commit.parentJobId != 0 && commit.parentMemoId != bytes32(0)) {
+            return commit.parentMemoId;
+        }
+        return commit.memoId;
     }
 
     function jobDeliveryConfirmationDeadline(uint256 jobId) external view returns (uint64) {
@@ -157,15 +174,26 @@ contract MockCoordinatorHook {
     function markSuccessSettled(uint256 jobId) external {
         sidecarStates[jobId] = MCUTypes.SidecarState.SuccessSettled;
     }
+
+    function markExpiryPendingTimeout(uint256 jobId) external {
+        sidecarStates[jobId] = MCUTypes.SidecarState.ExpiryPendingTimeout;
+    }
+
+    function markExpirySettled(uint256 jobId) external {
+        markExpirySettledCalled = true;
+        sidecarStates[jobId] = MCUTypes.SidecarState.ExpirySettled;
+    }
 }
 
 contract MCUCoordinatorTest is Test {
-    uint256 internal constant JOB_ID = 1;
+    uint256 internal constant OPEN_JOB_ID = 1;
+    uint256 internal constant CLOSE_JOB_ID = 2;
     uint256 internal constant BOND_AMOUNT = 100e18;
     uint256 internal constant PRINCIPAL_AMOUNT = 80e18;
     uint256 internal constant PREMIUM_AMOUNT = 5e18;
     uint256 internal constant SERVICE_FEE = 12e18;
     bytes32 internal constant MEMO_ID = keccak256("memo-id");
+    bytes32 internal constant CLOSE_MEMO_ID = keccak256("close-memo-id");
     bytes32 internal constant SUCCESS_DISPUTE_HASH = keccak256("success-dispute");
     bytes32 internal constant SUCCESS_DISPUTE_REASON = keccak256("merchant-won");
 
@@ -192,7 +220,7 @@ contract MCUCoordinatorTest is Test {
         adapter = new MCUJobAdapter(address(usdc), bondManager, address(coordinator));
 
         vm.prank(address(coordinator));
-        adapter.configure(JOB_ID, client, provider, MEMO_ID, merchantExecutionWallet);
+        adapter.configure(OPEN_JOB_ID, client, provider, MEMO_ID, merchantExecutionWallet);
 
         hook.setUnderwriterEvaluator(underwriterEvaluator);
 
@@ -210,12 +238,12 @@ contract MCUCoordinatorTest is Test {
         vm.prank(client);
         usdc.approve(address(bondManager), PREMIUM_AMOUNT);
 
-        MCUTypes.MCUCommit memory commit = _commit();
-        hook.seedJob(JOB_ID, MCUTypes.SidecarState.FeeEscrowed, commit, address(adapter), 0, 0, bytes32(0));
+        MCUTypes.MCUCommit memory commit = _commit(MEMO_ID, 0, bytes32(0));
+        hook.seedJob(OPEN_JOB_ID, MCUTypes.SidecarState.FeeEscrowed, commit, address(adapter), 0, 0, bytes32(0));
 
         acp.setJob(
             IAgenticCommerceKernel.Job({
-                id: JOB_ID,
+                id: OPEN_JOB_ID,
                 client: client,
                 provider: provider,
                 evaluator: underwriterEvaluator,
@@ -226,13 +254,14 @@ contract MCUCoordinatorTest is Test {
                 status: IAgenticCommerceKernel.JobStatus.Funded
             })
         );
+        acp.setJobKind(OPEN_JOB_ID, IAgenticCommerceKernel.JobKind.Open);
 
-        coordinator.orchestrateFunding(JOB_ID, _permit(), bytes("permit-sig"));
+        coordinator.orchestrateFunding(OPEN_JOB_ID, _permit(OPEN_JOB_ID, MEMO_ID, bytes32(0)), bytes("permit-sig"));
 
         assertTrue(hook.markProtectedCalled());
-        assertEq(hook.lastMarkedJobId(), JOB_ID);
+        assertEq(hook.lastMarkedJobId(), OPEN_JOB_ID);
         assertEq(hook.lastMarkedAdapter(), address(adapter));
-        assertEq(uint256(hook.jobSidecarState(JOB_ID)), uint256(MCUTypes.SidecarState.Protected));
+        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), uint256(MCUTypes.SidecarState.Protected));
 
         assertTrue(bondManager.lockBondCalled());
         assertTrue(bondManager.releasePrincipalCalled());
@@ -241,15 +270,62 @@ contract MCUCoordinatorTest is Test {
         assertEq(usdc.balanceOf(merchantExecutionWallet), PRINCIPAL_AMOUNT);
     }
 
+    function testCloseOrchestrateFundingMarksProtectedWithoutPullingNewBondOrPrincipal() public {
+        MCUTypes.MCUCommit memory openCommit = _commit(MEMO_ID, 0, bytes32(0));
+        MCUTypes.MCUCommit memory closeCommit = _commit(CLOSE_MEMO_ID, OPEN_JOB_ID, MEMO_ID);
+
+        hook.seedJob(OPEN_JOB_ID, MCUTypes.SidecarState(4), openCommit, address(adapter), 0, 0, bytes32(0));
+        hook.seedJob(CLOSE_JOB_ID, MCUTypes.SidecarState.FeeEscrowed, closeCommit, address(0), 0, 0, bytes32(0));
+
+        acp.setJob(
+            IAgenticCommerceKernel.Job({
+                id: OPEN_JOB_ID,
+                client: client,
+                provider: provider,
+                evaluator: underwriterEvaluator,
+                hook: address(hook),
+                description: "open mcu job",
+                budget: SERVICE_FEE,
+                expiredAt: block.timestamp + 1 days,
+                status: IAgenticCommerceKernel.JobStatus.Completed
+            })
+        );
+        acp.setJob(
+            IAgenticCommerceKernel.Job({
+                id: CLOSE_JOB_ID,
+                client: client,
+                provider: provider,
+                evaluator: underwriterEvaluator,
+                hook: address(hook),
+                description: "close mcu job",
+                budget: SERVICE_FEE / 2,
+                expiredAt: block.timestamp + 2 days,
+                status: IAgenticCommerceKernel.JobStatus.Funded
+            })
+        );
+        acp.setJobKind(OPEN_JOB_ID, IAgenticCommerceKernel.JobKind.Open);
+        acp.setJobKind(CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
+        acp.linkCloseJob(OPEN_JOB_ID, CLOSE_JOB_ID);
+
+        coordinator.orchestrateFunding(CLOSE_JOB_ID, _permit(CLOSE_JOB_ID, CLOSE_MEMO_ID, MEMO_ID), bytes("unused"));
+
+        assertTrue(hook.markProtectedCalled());
+        assertEq(hook.lastMarkedJobId(), CLOSE_JOB_ID);
+        assertFalse(bondManager.lockBondCalled());
+        assertFalse(bondManager.releasePrincipalCalled());
+        assertEq(usdc.balanceOf(address(bondManager)), 0);
+        assertEq(usdc.balanceOf(merchantExecutionWallet), 0);
+    }
+
     function testOpenSuccessDisputeMarksHookAfterTimeoutForMerchant() public {
         _seedCompletedJob(MCUTypes.SidecarState.SuccessPendingConfirmation, uint64(block.timestamp - 1), bytes32(0));
 
         vm.prank(provider);
-        coordinator.openSuccessDispute(JOB_ID, SUCCESS_DISPUTE_HASH);
+        coordinator.openSuccessDispute(OPEN_JOB_ID, SUCCESS_DISPUTE_HASH);
 
         assertTrue(hook.markSuccessDisputeOpenCalled());
-        assertEq(uint256(hook.jobSidecarState(JOB_ID)), uint256(MCUTypes.SidecarState.SuccessDisputeOpen));
-        assertEq(hook.jobLastSuccessDisputeHash(JOB_ID), SUCCESS_DISPUTE_HASH);
+        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessDisputeOpen));
+        assertEq(hook.jobLastSuccessDisputeHash(OPEN_JOB_ID), SUCCESS_DISPUTE_HASH);
     }
 
     function testOpenSuccessDisputeRevertsBeforeTimeout() public {
@@ -260,17 +336,17 @@ contract MCUCoordinatorTest is Test {
             abi.encodeWithSelector(MCUCoordinator.ConfirmationTimeoutNotReached.selector, deadline, uint64(block.timestamp))
         );
         vm.prank(provider);
-        coordinator.openSuccessDispute(JOB_ID, SUCCESS_DISPUTE_HASH);
+        coordinator.openSuccessDispute(OPEN_JOB_ID, SUCCESS_DISPUTE_HASH);
     }
 
     function testConfirmDeliveryStillWorksAfterTimeoutBeforeDisputeOpens() public {
         _seedCompletedJob(MCUTypes.SidecarState.SuccessPendingConfirmation, uint64(block.timestamp - 1), bytes32(0));
 
-        coordinator.confirmDelivery(JOB_ID, 7, bytes("delivery-sig"));
+        coordinator.confirmDelivery(OPEN_JOB_ID, 7, bytes("delivery-sig"));
 
         assertTrue(bondManager.confirmDeliveryCalled());
         assertTrue(hook.markSuccessPendingBondReleaseCalled());
-        assertEq(uint256(hook.jobSidecarState(JOB_ID)), uint256(MCUTypes.SidecarState.SuccessPendingBondRelease));
+        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessPendingBondRelease));
     }
 
     function testApplySuccessDisputeDecisionReleaseMarksBondReleasePending() public {
@@ -278,13 +354,13 @@ contract MCUCoordinatorTest is Test {
 
         vm.prank(underwriterEvaluator);
         coordinator.applySuccessDisputeDecision(
-            _successDisputeDecision(MCUTypes.SuccessDisputeOutcome.ReleaseBond, SUCCESS_DISPUTE_HASH, bytes32(0)),
+            _successDisputeDecision(OPEN_JOB_ID, MEMO_ID, MCUTypes.SuccessDisputeOutcome.ReleaseBond, SUCCESS_DISPUTE_HASH, bytes32(0)),
             _emptySlashAttestation(),
             bytes("")
         );
 
         assertTrue(hook.markSuccessPendingBondReleaseCalled());
-        assertEq(uint256(hook.jobSidecarState(JOB_ID)), uint256(MCUTypes.SidecarState.SuccessPendingBondRelease));
+        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessPendingBondRelease));
     }
 
     function testApplySuccessDisputeDecisionSlashCallsBondManagerAndMarksSuccessSlashed() public {
@@ -295,20 +371,114 @@ contract MCUCoordinatorTest is Test {
 
         vm.prank(underwriterEvaluator);
         coordinator.applySuccessDisputeDecision(
-            _successDisputeDecision(MCUTypes.SuccessDisputeOutcome.SlashBond, SUCCESS_DISPUTE_HASH, attestationHash),
+            _successDisputeDecision(OPEN_JOB_ID, MEMO_ID, MCUTypes.SuccessDisputeOutcome.SlashBond, SUCCESS_DISPUTE_HASH, attestationHash),
             attestation,
             bytes("slash-sig")
         );
 
         assertTrue(bondManager.slashCalled());
         assertTrue(hook.markSuccessSlashedCalled());
-        assertEq(uint256(hook.jobSidecarState(JOB_ID)), uint256(MCUTypes.SidecarState.SuccessSlashed));
+        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessSlashed));
     }
 
-    function _commit() internal view returns (MCUTypes.MCUCommit memory) {
-        return MCUTypes.MCUCommit({
+    function testCloseSuccessDisputeSlashUsesParentSettlementIdentity() public {
+        MCUTypes.MCUCommit memory openCommit = _commit(MEMO_ID, 0, bytes32(0));
+        MCUTypes.MCUCommit memory closeCommit = _commit(CLOSE_MEMO_ID, OPEN_JOB_ID, MEMO_ID);
+
+        hook.seedJob(
+            OPEN_JOB_ID, MCUTypes.SidecarState.AwaitingClose, openCommit, address(adapter), 0, 0, bytes32(0)
+        );
+        hook.seedJob(
+            CLOSE_JOB_ID,
+            MCUTypes.SidecarState.SuccessDisputeOpen,
+            closeCommit,
+            address(adapter),
+            uint64(block.timestamp),
+            uint64(block.timestamp - 1),
+            SUCCESS_DISPUTE_HASH
+        );
+
+        acp.setJob(
+            IAgenticCommerceKernel.Job({
+                id: CLOSE_JOB_ID,
+                client: client,
+                provider: provider,
+                evaluator: underwriterEvaluator,
+                hook: address(hook),
+                description: "close mcu job",
+                budget: SERVICE_FEE / 2,
+                expiredAt: block.timestamp + 2 days,
+                status: IAgenticCommerceKernel.JobStatus.Completed
+            })
+        );
+        acp.setJobKind(OPEN_JOB_ID, IAgenticCommerceKernel.JobKind.Open);
+        acp.setJobKind(CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
+        acp.linkCloseJob(OPEN_JOB_ID, CLOSE_JOB_ID);
+
+        IBondManager.SlashAttestation memory attestation = IBondManager.SlashAttestation({
             memoId: MEMO_ID,
-            parentJobId: 0,
+            jobId: OPEN_JOB_ID,
+            safe: address(adapter),
+            user: client,
+            merchant: provider,
+            slashAmountUsdc: 25e18,
+            reasonCode: SUCCESS_DISPUTE_REASON,
+            validUntil: uint64(block.timestamp + 1 days),
+            nonce: 33
+        });
+        bytes32 attestationHash = _hashSlashAttestation(attestation);
+
+        vm.prank(underwriterEvaluator);
+        coordinator.applySuccessDisputeDecision(
+            _successDisputeDecision(CLOSE_JOB_ID, MEMO_ID, MCUTypes.SuccessDisputeOutcome.SlashBond, SUCCESS_DISPUTE_HASH, attestationHash),
+            attestation,
+            bytes("slash-sig")
+        );
+
+        assertTrue(bondManager.slashCalled());
+        assertEq(uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessSlashed));
+    }
+
+    function testCloseSettleExpiryDoesNotClaimTimeoutOnParentBond() public {
+        MCUTypes.MCUCommit memory openCommit = _commit(MEMO_ID, 0, bytes32(0));
+        MCUTypes.MCUCommit memory closeCommit = _commit(CLOSE_MEMO_ID, OPEN_JOB_ID, MEMO_ID);
+
+        hook.seedJob(
+            OPEN_JOB_ID, MCUTypes.SidecarState.AwaitingClose, openCommit, address(adapter), 0, 0, bytes32(0)
+        );
+        hook.seedJob(CLOSE_JOB_ID, MCUTypes.SidecarState.Protected, closeCommit, address(adapter), 0, 0, bytes32(0));
+
+        acp.setJob(
+            IAgenticCommerceKernel.Job({
+                id: CLOSE_JOB_ID,
+                client: client,
+                provider: provider,
+                evaluator: underwriterEvaluator,
+                hook: address(hook),
+                description: "close mcu job",
+                budget: SERVICE_FEE / 2,
+                expiredAt: block.timestamp - 1,
+                status: IAgenticCommerceKernel.JobStatus.Expired
+            })
+        );
+        acp.setJobKind(OPEN_JOB_ID, IAgenticCommerceKernel.JobKind.Open);
+        acp.setJobKind(CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
+        acp.linkCloseJob(OPEN_JOB_ID, CLOSE_JOB_ID);
+
+        coordinator.settleExpiry(CLOSE_JOB_ID);
+
+        assertFalse(bondManager.claimTimeoutCalled());
+        assertEq(uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.ExpirySettled));
+    }
+
+    function _commit(bytes32 memoId, uint256 parentJobId, bytes32 parentMemoId)
+        internal
+        view
+        returns (MCUTypes.MCUCommit memory)
+    {
+        return MCUTypes.MCUCommit({
+            memoId: memoId,
+            parentJobId: parentJobId,
             underwriter: underwriter,
             merchantExecutionWallet: merchantExecutionWallet,
             decisionFeeUsdc: PREMIUM_AMOUNT,
@@ -320,16 +490,20 @@ contract MCUCoordinatorTest is Test {
             unlockAt: uint64(block.timestamp + 3 days),
             deliveryConfirmationTimeoutWindow: uint64(1 days),
             policyHash: keccak256("policy"),
-            parentMemoId: bytes32(0),
+            parentMemoId: parentMemoId,
             quoteIdHash: keccak256("quote"),
             releasePrincipal: true
         });
     }
 
-    function _permit() internal view returns (IBondManager.UnderwritePermit memory) {
+    function _permit(uint256 jobId, bytes32 memoId, bytes32 parentMemoId)
+        internal
+        view
+        returns (IBondManager.UnderwritePermit memory)
+    {
         return IBondManager.UnderwritePermit({
-            memoId: MEMO_ID,
-            jobId: JOB_ID,
+            memoId: memoId,
+            jobId: jobId,
             safe: address(adapter),
             user: client,
             merchant: address(adapter),
@@ -344,7 +518,7 @@ contract MCUCoordinatorTest is Test {
             policyHash: keccak256("policy"),
             nonce: 1,
             unlockAt: uint64(block.timestamp + 3 days),
-            parentMemoId: bytes32(0)
+            parentMemoId: parentMemoId
         });
     }
 
@@ -354,9 +528,9 @@ contract MCUCoordinatorTest is Test {
         bytes32 disputeHash
     ) internal {
         hook.seedJob(
-            JOB_ID,
+            OPEN_JOB_ID,
             sidecarState,
-            _commit(),
+            _commit(MEMO_ID, 0, bytes32(0)),
             address(adapter),
             uint64(block.timestamp),
             deliveryConfirmationDeadline,
@@ -365,7 +539,7 @@ contract MCUCoordinatorTest is Test {
 
         acp.setJob(
             IAgenticCommerceKernel.Job({
-                id: JOB_ID,
+                id: OPEN_JOB_ID,
                 client: client,
                 provider: provider,
                 evaluator: underwriterEvaluator,
@@ -376,16 +550,19 @@ contract MCUCoordinatorTest is Test {
                 status: IAgenticCommerceKernel.JobStatus.Completed
             })
         );
+        acp.setJobKind(OPEN_JOB_ID, IAgenticCommerceKernel.JobKind.Open);
     }
 
     function _successDisputeDecision(
+        uint256 jobId,
+        bytes32 memoId,
         MCUTypes.SuccessDisputeOutcome outcome,
         bytes32 disputeHash,
         bytes32 slashAttestationHash
     ) internal view returns (MCUTypes.SuccessDisputeDecision memory) {
         return MCUTypes.SuccessDisputeDecision({
-            jobId: JOB_ID,
-            memoId: MEMO_ID,
+            jobId: jobId,
+            memoId: memoId,
             disputeHash: disputeHash,
             outcome: outcome,
             reason: SUCCESS_DISPUTE_REASON,
@@ -412,7 +589,7 @@ contract MCUCoordinatorTest is Test {
     function _slashAttestation() internal view returns (IBondManager.SlashAttestation memory) {
         return IBondManager.SlashAttestation({
             memoId: MEMO_ID,
-            jobId: JOB_ID,
+            jobId: OPEN_JOB_ID,
             safe: address(adapter),
             user: client,
             merchant: provider,

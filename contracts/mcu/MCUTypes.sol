@@ -7,6 +7,7 @@ library MCUTypes {
         Committed,
         FeeEscrowed,
         Protected,
+        AwaitingClose,
         EvidenceSubmitted,
         SuccessPendingConfirmation,
         SuccessDisputeOpen,

@@ -64,6 +64,12 @@ contract MCUCoordinator {
 
         MCUTypes.MCUCommit memory commit = hook.getCommit(jobId);
         MCUJobAdapter adapter = _getOrCreateAdapter(jobId, job, commit);
+        if (acp.getJobKind(jobId) == IAgenticCommerceKernel.JobKind.Close) {
+            hook.markProtected(jobId, address(adapter));
+            emit FundingOrchestrated(jobId, address(adapter), hook.jobMemoId(jobId));
+            return;
+        }
+
         _assertPermitMatches(jobId, job, commit, permit, address(adapter));
 
         // These adapter calls are intentionally lightweight in the scaffold. The
@@ -128,6 +134,7 @@ contract MCUCoordinator {
 
         bytes32 disputeHash = hook.jobLastSuccessDisputeHash(decision.jobId);
         if (decision.disputeHash != disputeHash) revert DisputeHashMismatch(disputeHash, decision.disputeHash);
+        MCUTypes.MCUCommit memory commit = hook.getCommit(decision.jobId);
 
         if (decision.outcome == MCUTypes.SuccessDisputeOutcome.ReleaseBond) {
             if (decision.slashAttestationHash != bytes32(0)) {
@@ -146,7 +153,7 @@ contract MCUCoordinator {
             revert SlashAttestationHashMismatch(decision.slashAttestationHash, actualSlashAttestationHash);
         }
         if (attestation.memoId != decision.memoId) revert MemoMismatch(decision.memoId, attestation.memoId);
-        if (attestation.jobId != decision.jobId) revert PermitMismatch();
+        if (attestation.jobId != _settlementJobId(decision.jobId, commit)) revert PermitMismatch();
 
         MCUJobAdapter adapter = _adapter(decision.jobId);
         adapter.slashBond(attestation, slashSig);
@@ -169,7 +176,7 @@ contract MCUCoordinator {
         adapter.releaseBondAndForward();
         hook.markSuccessSettled(jobId);
 
-        emit BondReleased(jobId, commit.memoId);
+        emit BondReleased(jobId, hook.jobMemoId(jobId));
     }
 
     function settleExpiry(uint256 jobId) external {
@@ -179,9 +186,22 @@ contract MCUCoordinator {
         MCUTypes.MCUCommit memory commit = hook.getCommit(jobId);
         MCUTypes.SidecarState state = hook.jobSidecarState(jobId);
 
+        if (commit.parentJobId != 0) {
+            if (
+                state != MCUTypes.SidecarState.FeeEscrowed && state != MCUTypes.SidecarState.Protected
+                    && state != MCUTypes.SidecarState.EvidenceSubmitted
+            ) {
+                revert InvalidState();
+            }
+
+            hook.markExpirySettled(jobId);
+            emit ExpirySettled(jobId, hook.jobMemoId(jobId), false);
+            return;
+        }
+
         if (state == MCUTypes.SidecarState.FeeEscrowed) {
             hook.markExpirySettled(jobId);
-            emit ExpirySettled(jobId, commit.memoId, false);
+            emit ExpirySettled(jobId, hook.jobMemoId(jobId), false);
             return;
         }
 
@@ -194,7 +214,7 @@ contract MCUCoordinator {
         adapter.claimTimeout();
         hook.markExpirySettled(jobId);
 
-        emit ExpirySettled(jobId, commit.memoId, true);
+        emit ExpirySettled(jobId, hook.jobMemoId(jobId), true);
     }
 
     function finalizeRejectedJob(uint256 jobId) external {
@@ -203,6 +223,12 @@ contract MCUCoordinator {
         if (hook.jobSidecarState(jobId) != MCUTypes.SidecarState.RejectPendingSlash) revert InvalidState();
 
         MCUTypes.MCUCommit memory commit = hook.getCommit(jobId);
+        if (commit.parentJobId != 0) {
+            hook.markRejectSettled(jobId);
+            emit RejectedJobFinalized(jobId, hook.jobMemoId(jobId));
+            return;
+        }
+
         MCUJobAdapter adapter = _adapter(jobId);
 
         // The actual slash call remains external to this skeleton because the
@@ -210,7 +236,7 @@ contract MCUCoordinator {
         adapter.sweepResidualToProvider();
         hook.markRejectSettled(jobId);
 
-        emit RejectedJobFinalized(jobId, commit.memoId);
+        emit RejectedJobFinalized(jobId, hook.jobMemoId(jobId));
     }
 
     function _getHookedJob(uint256 jobId) internal view returns (IAgenticCommerceKernel.Job memory job) {
@@ -234,8 +260,28 @@ contract MCUCoordinator {
             return MCUJobAdapter(adapterAddress);
         }
 
+        if (commit.parentJobId != 0) {
+            address parentAdapterAddress = hook.jobAdapter(commit.parentJobId);
+            if (parentAdapterAddress == address(0)) revert MissingAdapter();
+            return MCUJobAdapter(parentAdapterAddress);
+        }
+
         adapter = new MCUJobAdapter(acp.paymentToken(), bondManager, address(this));
-        adapter.configure(jobId, job.client, job.provider, commit.memoId, commit.merchantExecutionWallet);
+        adapter.configure(jobId, job.client, job.provider, _settlementMemoId(commit), commit.merchantExecutionWallet);
+    }
+
+    function _settlementMemoId(MCUTypes.MCUCommit memory commit) internal pure returns (bytes32) {
+        if (commit.parentJobId != 0 && commit.parentMemoId != bytes32(0)) {
+            return commit.parentMemoId;
+        }
+        return commit.memoId;
+    }
+
+    function _settlementJobId(uint256 jobId, MCUTypes.MCUCommit memory commit) internal pure returns (uint256) {
+        if (commit.parentJobId != 0) {
+            return commit.parentJobId;
+        }
+        return jobId;
     }
 
     function _assertPermitMatches(

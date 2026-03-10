@@ -75,6 +75,7 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
     error InvalidParentJob();
     error ParentJobNotCompleted();
     error CloseJobAlreadyExists();
+    error SubmitNotAllowedForOpenJob();
 
     constructor(address paymentToken_, address treasury_) {
         if (paymentToken_ == address(0) || treasury_ == address(0)) revert ZeroAddress();
@@ -112,7 +113,13 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         if (parentJob.id == 0 || jobKindByJobId[parentJobId] != JobKind.Open) revert InvalidParentJob();
         if (msg.sender != parentJob.client) revert Unauthorized();
         if (parentJob.status != JobStatus.Completed) revert ParentJobNotCompleted();
-        if (closeJobIdByParentJobId[parentJobId] != 0) revert CloseJobAlreadyExists();
+        uint256 existingCloseJobId = closeJobIdByParentJobId[parentJobId];
+        if (existingCloseJobId != 0) {
+            JobStatus existingCloseStatus = jobs[existingCloseJobId].status;
+            if (existingCloseStatus != JobStatus.Rejected && existingCloseStatus != JobStatus.Expired) {
+                revert CloseJobAlreadyExists();
+            }
+        }
 
         jobId = _createJob(msg.sender, parentJob.provider, parentJob.evaluator, expiredAt, description);
         jobKindByJobId[jobId] = JobKind.Close;
@@ -184,6 +191,7 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
         if (job.status != JobStatus.Funded) revert WrongStatus();
+        if (jobKindByJobId[jobId] == JobKind.Open) revert SubmitNotAllowedForOpenJob();
         if (msg.sender != job.provider) revert Unauthorized();
         job.status = JobStatus.Submitted;
         emit JobSubmitted(jobId, msg.sender, deliverable);
@@ -192,8 +200,12 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
     function complete(uint256 jobId, bytes32 reason) external nonReentrant {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
-        if (job.status != JobStatus.Submitted) revert WrongStatus();
         if (msg.sender != job.evaluator) revert Unauthorized();
+        if (jobKindByJobId[jobId] == JobKind.Open) {
+            if (job.status != JobStatus.Funded) revert WrongStatus();
+        } else {
+            if (job.status != JobStatus.Submitted) revert WrongStatus();
+        }
         job.status = JobStatus.Completed;
         uint256 amount = job.budget;
         uint256 fee = (amount * platformFeeBP) / 10000;

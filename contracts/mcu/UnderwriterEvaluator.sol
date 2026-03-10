@@ -103,8 +103,16 @@ contract UnderwriterEvaluator is EIP712 {
         if (block.timestamp > decision.deadline) revert DecisionExpired(decision.deadline, uint64(block.timestamp));
 
         IAgenticCommerceKernel.Job memory job = acp.getJob(decision.jobId);
-        if (job.status != IAgenticCommerceKernel.JobStatus.Submitted) revert WrongJobStatus();
-        if (hook.jobSidecarState(decision.jobId) != MCUTypes.SidecarState.EvidenceSubmitted) revert WrongSidecarState();
+        IAgenticCommerceKernel.JobKind jobKind = acp.getJobKind(decision.jobId);
+        if (jobKind == IAgenticCommerceKernel.JobKind.Open) {
+            if (job.status != IAgenticCommerceKernel.JobStatus.Funded) revert WrongJobStatus();
+            if (hook.jobSidecarState(decision.jobId) != MCUTypes.SidecarState.Protected) revert WrongSidecarState();
+        } else {
+            if (job.status != IAgenticCommerceKernel.JobStatus.Submitted) revert WrongJobStatus();
+            if (hook.jobSidecarState(decision.jobId) != MCUTypes.SidecarState.EvidenceSubmitted) {
+                revert WrongSidecarState();
+            }
+        }
 
         address underwriter = hook.jobUnderwriter(decision.jobId);
         bytes32 memoId = hook.jobMemoId(decision.jobId);
@@ -140,8 +148,16 @@ contract UnderwriterEvaluator is EIP712 {
         if (block.timestamp > decision.deadline) revert DecisionExpired(decision.deadline, uint64(block.timestamp));
 
         IAgenticCommerceKernel.Job memory job = acp.getJob(decision.jobId);
-        if (job.status != IAgenticCommerceKernel.JobStatus.Submitted) revert WrongJobStatus();
-        if (hook.jobSidecarState(decision.jobId) != MCUTypes.SidecarState.EvidenceSubmitted) revert WrongSidecarState();
+        IAgenticCommerceKernel.JobKind jobKind = acp.getJobKind(decision.jobId);
+        if (jobKind == IAgenticCommerceKernel.JobKind.Open) {
+            if (job.status != IAgenticCommerceKernel.JobStatus.Funded) revert WrongJobStatus();
+            if (hook.jobSidecarState(decision.jobId) != MCUTypes.SidecarState.Protected) revert WrongSidecarState();
+        } else {
+            if (job.status != IAgenticCommerceKernel.JobStatus.Submitted) revert WrongJobStatus();
+            if (hook.jobSidecarState(decision.jobId) != MCUTypes.SidecarState.EvidenceSubmitted) {
+                revert WrongSidecarState();
+            }
+        }
 
         address underwriter = hook.jobUnderwriter(decision.jobId);
         bytes32 memoId = hook.jobMemoId(decision.jobId);

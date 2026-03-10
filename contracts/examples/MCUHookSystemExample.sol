@@ -54,10 +54,17 @@ import "../mcu/UnderwriterEvaluator.sol";
  *     in the committed MCU profile.
  *
  *  6. Continue with the normal MCU flow:
- *       `fund(...)`
- *       `coordinator.orchestrateFunding(...)`
- *       `submit(...)`
- *       `evaluator.completeBySig(...)` or `rejectBySig(...)`
+ *       Open leg:
+ *         `fund(...)`
+ *         `coordinator.orchestrateFunding(...)`
+ *         `evaluator.completeBySig(...)` or `rejectBySig(...)`
+ *
+ *       Later, if the client requests a linked close leg:
+ *         `createCloseJob(...)`
+ *         `fund(...)`
+ *         `coordinator.orchestrateFunding(...)`
+ *         `submit(...)`
+ *         `evaluator.completeBySig(...)` or `rejectBySig(...)`
  *
  * IMPORTANT
  * ---------

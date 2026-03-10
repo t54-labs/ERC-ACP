@@ -126,7 +126,11 @@ contract MCUHookLite is IACPHook {
             _beforeSubmit(jobId);
             return;
         }
-        if (selector == SEL_COMPLETE || selector == SEL_REJECT) {
+        if (selector == SEL_COMPLETE) {
+            _beforeComplete(jobId);
+            return;
+        }
+        if (selector == SEL_REJECT) {
             return;
         }
 
@@ -162,7 +166,7 @@ contract MCUHookLite is IACPHook {
     }
 
     function jobMemoId(uint256 jobId) external view returns (bytes32) {
-        return profiles[jobId].commit.memoId;
+        return _settlementMemoId(profiles[jobId].commit);
     }
 
     function jobAdapter(uint256 jobId) external view returns (address) {
@@ -275,6 +279,17 @@ contract MCUHookLite is IACPHook {
 
     function markExpirySettled(uint256 jobId) external onlyCoordinator {
         Profile storage profile = _profile(jobId);
+        if (profile.commit.parentJobId != 0) {
+            if (
+                profile.sidecarState != MCUTypes.SidecarState.FeeEscrowed
+                    && profile.sidecarState != MCUTypes.SidecarState.Protected
+                    && profile.sidecarState != MCUTypes.SidecarState.EvidenceSubmitted
+            ) {
+                revert InvalidState();
+            }
+            _setState(profile, jobId, MCUTypes.SidecarState.ExpirySettled);
+            return;
+        }
         if (
             profile.sidecarState != MCUTypes.SidecarState.FeeEscrowed
                 && profile.sidecarState != MCUTypes.SidecarState.ExpiryPendingTimeout
@@ -344,6 +359,15 @@ contract MCUHookLite is IACPHook {
         }
     }
 
+    function _beforeComplete(uint256 jobId) internal view {
+        Profile storage profile = _profile(jobId);
+        if (acp.getJobKind(jobId) == IAgenticCommerceKernel.JobKind.Open) {
+            if (profile.sidecarState != MCUTypes.SidecarState.Protected) revert InvalidState();
+            return;
+        }
+        if (profile.sidecarState != MCUTypes.SidecarState.EvidenceSubmitted) revert InvalidState();
+    }
+
     function _afterSubmit(uint256 jobId, bytes calldata data) internal {
         Profile storage profile = _profile(jobId);
         (bytes32 deliverable, bytes memory optParams) = abi.decode(data, (bytes32, bytes));
@@ -368,9 +392,15 @@ contract MCUHookLite is IACPHook {
 
         (bytes32 reason,) = abi.decode(data, (bytes32, bytes));
         profile.lastReason = reason;
-        profile.completionObservedAt = uint64(block.timestamp);
         profile.lastSuccessDisputeHash = bytes32(0);
-        _setState(profile, jobId, MCUTypes.SidecarState.SuccessPendingConfirmation);
+
+        if (acp.getJobKind(jobId) == IAgenticCommerceKernel.JobKind.Open) {
+            profile.completionObservedAt = 0;
+            _setState(profile, jobId, MCUTypes.SidecarState.AwaitingClose);
+        } else {
+            profile.completionObservedAt = uint64(block.timestamp);
+            _setState(profile, jobId, MCUTypes.SidecarState.SuccessPendingConfirmation);
+        }
 
         emit CompletionObserved(jobId, profile.commit.memoId, reason);
     }
@@ -385,7 +415,7 @@ contract MCUHookLite is IACPHook {
         bytes32 slashAttestationHash;
         if (optParams.length > 0) {
             MCUTypes.RejectContext memory context = abi.decode(optParams, (MCUTypes.RejectContext));
-            if (context.memoId != profile.commit.memoId) revert EvidenceMismatch();
+            if (context.memoId != _settlementMemoId(profile.commit)) revert EvidenceMismatch();
             slashAttestationHash = context.slashAttestationHash;
             profile.lastSlashAttestationHash = context.slashAttestationHash;
         }
@@ -399,7 +429,7 @@ contract MCUHookLite is IACPHook {
             _setState(profile, jobId, MCUTypes.SidecarState.RejectSettled);
         }
 
-        emit RejectionObserved(jobId, profile.commit.memoId, reason, slashAttestationHash);
+        emit RejectionObserved(jobId, _settlementMemoId(profile.commit), reason, slashAttestationHash);
     }
 
     function _profile(uint256 jobId) internal view returns (Profile storage profile) {
@@ -419,7 +449,7 @@ contract MCUHookLite is IACPHook {
 
         if (
             parentJob.status != IAgenticCommerceKernel.JobStatus.Completed
-                || parentProfile.sidecarState != MCUTypes.SidecarState.SuccessSettled
+                || parentProfile.sidecarState != MCUTypes.SidecarState.AwaitingClose
         ) {
             revert InvalidState();
         }
@@ -459,6 +489,7 @@ contract MCUHookLite is IACPHook {
         } else if (commit.parentMemoId != parentProfile.commit.memoId) {
             revert ParentMemoMismatch();
         }
+        commit.unlockAt = parentProfile.commit.unlockAt;
 
         _assertParentReadyForClose(commit.parentJobId);
 
@@ -506,5 +537,12 @@ contract MCUHookLite is IACPHook {
                 commit.releasePrincipal
             )
         );
+    }
+
+    function _settlementMemoId(MCUTypes.MCUCommit memory commit) internal pure returns (bytes32) {
+        if (commit.parentJobId != 0 && commit.parentMemoId != bytes32(0)) {
+            return commit.parentMemoId;
+        }
+        return commit.memoId;
     }
 }

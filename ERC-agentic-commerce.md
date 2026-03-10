@@ -11,7 +11,7 @@ requires: 20
 
 ## Abstract
 
-This specification defines the **Agentic Commerce Protocol**: a **job** with escrowed budget, four states (Open → Funded → Submitted → Terminal), and an **evaluator** who alone may mark the job completed. The client funds the job; the provider submits work; the evaluator attests completion or rejection once submitted (or the evaluator rejects while Funded before submission, or the client rejects while Open, or the job expires and the client is refunded). Optional attestation **reason** (e.g. hash) on complete/reject enables audit and composition with reputation (e.g. [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004)).
+This specification defines the **Agentic Commerce Protocol**: a **job** with escrowed budget, four states (Open → Funded → Submitted → Terminal), and an **evaluator** who alone may mark the job completed. In the base flow, the client funds the job, the provider submits work, and the evaluator attests completion or rejection once submitted (or the evaluator rejects while Funded before submission, or the client rejects while Open, or the job expires and the client is refunded). Optional linked two-phase extensions MAY allow an open-phase job to complete directly from Funded before any later close-phase deliverable is submitted. Optional attestation **reason** (e.g. hash) on complete/reject enables audit and composition with reputation (e.g. [ERC-8004](https://eips.ethereum.org/EIPS/eip-8004)).
 
 ## Motivation
 
@@ -29,7 +29,7 @@ A **job** has exactly one of six states:
 | State         | Meaning                                                                                                           |
 | ------------- | ----------------------------------------------------------------------------------------------------------------- |
 | **Open**      | Created; budget not yet set or not yet funded. Client may set budget, then fund or reject.                        |
-| **Funded**    | Budget escrowed. Provider may submit work; evaluator may reject. After `expiredAt`, anyone may trigger refund.    |
+| **Funded**    | Budget escrowed. Provider may submit work; evaluator may reject. In optional linked open-phase flows, evaluator MAY also complete directly from Funded. After `expiredAt`, anyone may trigger refund.    |
 | **Submitted** | Provider has submitted work. Only evaluator may complete or reject. After `expiredAt`, anyone may trigger refund. |
 | **Completed** | Terminal. Escrow released to provider (minus optional platform fee).                                              |
 | **Rejected**  | Terminal. Escrow refunded to client.                                                                              |
@@ -41,6 +41,7 @@ Allowed transitions:
 - **Open → Funded**: Client or provider calls `setBudget(jobId, amount)` to agree on price, then client calls `fund(jobId, expectedBudget)`; contract pulls `job.budget` from client into escrow.
 - **Open → Rejected**: Client calls `reject(jobId, reason?)`.
 - **Funded → Submitted**: Provider calls `submit(jobId, deliverable)`; signals that work has been completed and is ready for evaluation.
+- **Funded → Completed**: OPTIONAL for linked Open-phase jobs. Evaluator calls `complete(jobId, reason?)` directly from Funded to attest that the opening or deployment step succeeded.
 - **Funded → Rejected**: Evaluator calls `reject(jobId, reason?)`; contract refunds client.
 - **Funded → Expired**: When `block.timestamp >= job.expiredAt`, anyone (or client) may call `claimRefund(jobId)`; contract sets state to Expired and refunds client.
 - **Submitted → Completed**: Evaluator calls `complete(jobId, reason?)`; contract distributes escrow to provider (and optional fee to treasury).
@@ -61,14 +62,23 @@ In such implementations:
   previously completed Open-phase parent.
 - The close job SHALL inherit the same `client`, `provider`, and `evaluator` as
   the parent open job.
-- A parent open job SHALL have at most one linked close job.
+- A parent open job SHALL have at most one **active** linked close job at a
+  time.
 - `createCloseJob(...)` SHALL revert unless the parent open job has already
   reached `Completed`.
+- Implementations MAY allow the client to create a replacement close job after a
+  prior close job reached `Rejected` or `Expired`.
+- Open-phase jobs MAY allow evaluator-driven completion directly from `Funded`
+  without a provider `submit(...)` step.
+- In such flows, the open-phase `reason` SHOULD be treated as an attestation
+  that the opening or deployment step succeeded, not as the final deliverable.
+- Close-phase jobs SHOULD carry the final `submit(...)` deliverable and any
+  final release/slash settlement semantics.
 
 ### Roles
 
 - **Client**: Creates standalone or open jobs (with description), may create a linked close job when the parent open job is completed, may set provider via `setProvider(jobId, provider)` when job was created with no provider, sets budget with `setBudget(jobId, amount)`, funds escrow with `fund(jobId, expectedBudget)`, may reject **only when status is Open**. Receives refund on Rejected/Expired.
-- **Provider**: Set at creation or later via `setProvider`. May call `setBudget(jobId, amount)` to propose or negotiate a price. Calls `submit(jobId, deliverable)` when work is done to move the job from Funded to Submitted for evaluation. Receives payment when job is Completed. Does not call `complete` or `reject`.
+- **Provider**: Set at creation or later via `setProvider`. May call `setBudget(jobId, amount)` to propose or negotiate a price. For standalone jobs and close-phase jobs, calls `submit(jobId, deliverable)` when work is done to move the job from Funded to Submitted for evaluation. In open-phase linked-job flows, the provider MAY have no on-chain `submit(...)` step if the evaluator can attest opening directly from `Funded`. Receives payment when job is Completed. Does not call `complete` or `reject`.
 - **Evaluator**: Single address per job, set at creation. When status is Submitted, **only** the evaluator MAY call `complete(jobId, reason?)` or `reject(jobId, reason?)`. When status is Funded, the evaluator MAY call `reject(jobId, reason?)` (before submission). MAY be the client (e.g. `evaluator = client`) so the client can complete or reject the job without a third party, or MAY be a **smart contract** that performs arbitrary checks (e.g. verifying a zero‑knowledge proof or aggregating off‑chain signals) before deciding whether to call `complete` or `reject` on the job.
 
 ### Job Data
@@ -104,7 +114,7 @@ Called by client. Creates a **standalone** job in Open with `client = msg.sender
 - **createOpenJob(provider, evaluator, expiredAt, description, hook?)**
 OPTIONAL. Called by client. Creates an **Open-phase** job in Open using the same inputs as `createJob(...)`. Returns `jobId`.
 - **createCloseJob(parentJobId, expiredAt, description)**
-OPTIONAL. Called by the parent job's client. Creates a **Close-phase** job linked to `parentJobId`. SHALL revert if the parent job does not exist, is not an Open-phase job, is not yet `Completed`, or already has a linked close job. The close job SHALL inherit the parent job's `client`, `provider`, and `evaluator`. Hooked implementations MAY also inherit the same hook.
+OPTIONAL. Called by the parent job's client. Creates a **Close-phase** job linked to `parentJobId`. SHALL revert if the parent job does not exist, is not an Open-phase job, is not yet `Completed`, or already has another active linked close job. The close job SHALL inherit the parent job's `client`, `provider`, and `evaluator`. Hooked implementations MAY also inherit the same hook. Implementations MAY allow a replacement close job after a previous close job reached `Rejected` or `Expired`.
 - **setProvider(jobId, provider, optParams?)**
 Called by client. SHALL revert if job is not Open, current `job.provider != address(0)`, or `provider == address(0)`. SHALL set `job.provider = provider`. `optParams` (bytes, OPTIONAL) is forwarded to the hook contract if set (see Hooks).
 - **setBudget(jobId, amount, optParams?)**
@@ -112,9 +122,9 @@ Called by client or provider. Sets `job.budget = amount`. SHALL revert if job is
 - **fund(jobId, expectedBudget, optParams?)**
 Called by client. SHALL revert if job is not Open, caller is not client, budget is zero, **provider is not set** (`job.provider == address(0)`), or `job.budget != expectedBudget` (front-running protection). SHALL transfer `job.budget` of the payment token from client to the contract (escrow) and set status to Funded. `optParams` forwarded to hook if set.
 - **submit(jobId, deliverable, optParams?)**
-Called by provider only. SHALL revert if job is not Funded or caller is not the job's provider. SHALL set status to Submitted. `deliverable` (`bytes32`) is a reference to submitted work (e.g. hash of off-chain deliverable, IPFS CID, attestation commitment). SHALL emit an event including `deliverable` (e.g. JobSubmitted). `optParams` forwarded to hook if set.
+Called by provider only. SHALL revert if job is not Funded or caller is not the job's provider. In linked two-phase implementations, **Open-phase jobs MAY disallow `submit(...)` entirely**, while Close-phase jobs and standalone jobs continue to use it. When allowed, SHALL set status to Submitted. `deliverable` (`bytes32`) is a reference to submitted work (e.g. hash of off-chain deliverable, IPFS CID, attestation commitment). SHALL emit an event including `deliverable` (e.g. JobSubmitted). `optParams` forwarded to hook if set.
 - **complete(jobId, reason, optParams?)**
-Called by evaluator only. SHALL revert if job is not Submitted or caller is not the job's evaluator. SHALL set status to Completed. SHALL transfer escrowed funds to provider (minus optional platform fee to a configurable treasury). `reason` MAY be `bytes32(0)` or an attestation hash (OPTIONAL). SHALL emit an event including `reason` if provided. `optParams` forwarded to hook if set.
+Called by evaluator only. SHALL revert if caller is not the job's evaluator. For standalone jobs and Close-phase jobs, SHALL revert unless the job is Submitted. Linked Open-phase jobs MAY allow evaluator-driven completion directly from Funded. On success, SHALL set status to Completed and transfer escrowed funds to provider (minus optional platform fee to a configurable treasury). `reason` MAY be `bytes32(0)` or an attestation hash (OPTIONAL). SHALL emit an event including `reason` if provided. `optParams` forwarded to hook if set.
 - **reject(jobId, reason, optParams?)**
 Called by **client when job is Open** or by **evaluator when job is Funded or Submitted**. SHALL revert if job is not Open, Funded, or Submitted, or caller is not the client (when Open) or the evaluator (when Funded or Submitted). SHALL set status to Rejected. If Funded or Submitted, SHALL refund escrow to client. `reason` OPTIONAL. SHALL emit an event including `reason` and the caller (rejector) if provided. `optParams` forwarded to hook if set.
 - **claimRefund(jobId)**
@@ -327,7 +337,7 @@ Implementations SHOULD emit at least:
 - **Single attester after submission**: Once Submitted, only the evaluator can complete or reject; the client cannot pull funds back unilaterally, so the provider is protected after starting work. Evaluator = client covers the "no third party" case.
 - **Explicit submission**: The Submitted state gives the evaluator (and indexers/UIs) a clear signal that the provider considers work done and ready for evaluation, separating "funded and in progress" from "work delivered".
 - **Minimal surface**: Attestation is the optional `reason` on complete/reject; no additional ledger is required.
-- **Four states**: Open, Funded, Submitted, and Terminal (Completed, Rejected, or Expired) are enough for "fund → work → submit → evaluate or refund".
+- **Four states**: Open, Funded, Submitted, and Terminal (Completed, Rejected, or Expired) are enough for the base "fund → work → submit → evaluate or refund" flow, while linked two-phase extensions can specialize the meaning of `Funded` and `Completed` for open-phase jobs.
 - **Expiry**: Refund after `expiredAt` gives client a way to reclaim funds without an explicit reject.
 - **Hooks over inheritance**: Optional hook contracts let integrators extend the protocol (validation, reputation, fees) without modifying or inheriting from the core contract. The core stays minimal; complexity lives in the hook.
 - **Generic hook interface**: The `IACPHook` interface uses just two functions (`beforeAction`/`afterAction`) with a selector parameter rather than named functions per action. This keeps the interface stable as the core protocol evolves — new hookable functions simply produce new selector values without changing the interface.
