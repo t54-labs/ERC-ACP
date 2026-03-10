@@ -164,6 +164,7 @@ sequenceDiagram
         end
         Coord->>Adapter: lockBond(permit, permitSig)
         Adapter->>Bond: lockBond(permit, permit.user, unlockAt, permitSig)
+        Note over Bond,Client: BondManager also pulls decisionFeeUsdc premium from client during lockBond(...)
         opt releasePrincipal == true
             Coord->>Adapter: releasePrincipal(permit, permitSig)
             Adapter->>Bond: releasePrincipalToMerchant(permit, permitSig)

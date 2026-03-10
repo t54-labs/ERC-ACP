@@ -41,6 +41,7 @@ sequenceDiagram
     Coord->>Adapter: pullBondFromProvider(requiredBondUsdc)
     Coord->>Adapter: pullPrincipalFromClient(fundedPrincipalUsdc)
     Adapter->>Bond: lockBond(permit, permit.user, unlockAt, permitSig)
+    Note over Bond,Client: BondManager also pulls decisionFeeUsdc premium from client during lockBond(...)
     Adapter->>Bond: releasePrincipalToMerchant(permit, permitSig)
     Coord->>Hook: markProtected(openJobId, adapter)
     Note over Hook: sidecarState = Protected
