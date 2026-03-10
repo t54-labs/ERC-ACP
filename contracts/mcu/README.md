@@ -195,7 +195,7 @@ sequenceDiagram
                 ACP->>ACP: mark open job Completed
                 ACP->>Hook: afterAction(openJobId, complete, data)
                 Note over Hook: sidecarState = AwaitingClose
-                Note over Client,Provider: bond stays locked; no final deliverable yet
+                Note over Client,Provider: bond stays locked, no final deliverable yet
 
             else underwriter rejects open leg
                 Underwriter-->>Client: sign RejectDecision

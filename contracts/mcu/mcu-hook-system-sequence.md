@@ -52,7 +52,7 @@ sequenceDiagram
     Eval->>ACP: complete(openJobId, reason, abi.encode(CompleteContext))
     ACP->>Hook: afterAction(openJobId, complete, data)
     Note over Hook: sidecarState = AwaitingClose
-    Note over Client,Provider: bond remains locked; no final deliverable yet
+    Note over Client,Provider: bond remains locked, no final deliverable yet
 ```
 
 ## Linked Close Job Extension
