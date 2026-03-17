@@ -3,62 +3,62 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "../../contracts/mcu/IBondManager.sol";
+import "../../contracts/mcu/ICollateralManager.sol";
 
-contract MockBondManager is IBondManager {
+contract MockCollateralManager is ICollateralManager {
     using SafeERC20 for IERC20;
 
     IERC20 public immutable usdc;
 
     uint256 public lastLockJobId;
-    bytes32 public lastLockMemoId;
+    uint256 public lastLockSettlementJobId;
     address public lastLockClaimant;
     uint64 public lastLockUnlockAt;
     bytes32 public lastLockPermitSigHash;
-    bool public lockBondCalled;
+    bool public lockCollateralCalled;
 
     uint256 public lastReleasePrincipalJobId;
-    bytes32 public lastReleasePrincipalMemoId;
+    uint256 public lastReleasePrincipalSettlementJobId;
     bytes32 public lastReleasePrincipalPermitSigHash;
     bool public releasePrincipalCalled;
 
-    bytes32 public lastConfirmMemoId;
+    uint256 public lastConfirmSettlementJobId;
     uint256 public lastConfirmDeliveryNonce;
     bytes32 public lastConfirmSigHash;
     bool public confirmDeliveryCalled;
 
-    bytes32 public lastReleasedMemoId;
-    bool public releaseBondCalled;
+    uint256 public lastReleasedSettlementJobId;
+    bool public releaseCollateralCalled;
 
-    bytes32 public lastTimeoutMemoId;
+    uint256 public lastTimeoutSettlementJobId;
     bool public claimTimeoutCalled;
 
     SlashAttestation public lastSlashAttestation;
     bytes32 public lastSlashSigHash;
     bool public slashCalled;
 
-    mapping(bytes32 memoId => uint256 amount) public lockedBondByMemo;
+    mapping(uint256 settlementJobId => uint256 amount) public lockedCollateralBySettlementJobId;
 
     constructor(IERC20 usdc_) {
         usdc = usdc_;
     }
 
-    function lockBond(
+    function lockCollateral(
         UnderwritePermit calldata permit,
         address claimant,
         uint64 unlockAt,
         bytes calldata permitSig
     ) external override {
-        lockBondCalled = true;
+        lockCollateralCalled = true;
         lastLockJobId = permit.jobId;
-        lastLockMemoId = permit.memoId;
+        lastLockSettlementJobId = permit.settlementJobId;
         lastLockClaimant = claimant;
         lastLockUnlockAt = unlockAt;
         lastLockPermitSigHash = keccak256(permitSig);
 
-        if (permit.requiredBondUsdc > 0) {
-            usdc.safeTransferFrom(msg.sender, address(this), permit.requiredBondUsdc);
-            lockedBondByMemo[permit.memoId] += permit.requiredBondUsdc;
+        if (permit.requiredCollateralUsdc > 0) {
+            usdc.safeTransferFrom(msg.sender, address(this), permit.requiredCollateralUsdc);
+            lockedCollateralBySettlementJobId[permit.settlementJobId] += permit.requiredCollateralUsdc;
         }
 
         if (permit.decisionFeeUsdc > 0) {
@@ -69,7 +69,7 @@ contract MockBondManager is IBondManager {
     function releasePrincipalToMerchant(UnderwritePermit calldata permit, bytes calldata permitSig) external override {
         releasePrincipalCalled = true;
         lastReleasePrincipalJobId = permit.jobId;
-        lastReleasePrincipalMemoId = permit.memoId;
+        lastReleasePrincipalSettlementJobId = permit.settlementJobId;
         lastReleasePrincipalPermitSigHash = keccak256(permitSig);
 
         if (permit.fundedPrincipalUsdc > 0) {
@@ -77,28 +77,28 @@ contract MockBondManager is IBondManager {
         }
     }
 
-    function confirmDeliveryBySig(bytes32 memoId, uint256 deliveryNonce, bytes calldata sig) external override {
+    function confirmDeliveryBySig(uint256 settlementJobId, uint256 deliveryNonce, bytes calldata sig) external override {
         confirmDeliveryCalled = true;
-        lastConfirmMemoId = memoId;
+        lastConfirmSettlementJobId = settlementJobId;
         lastConfirmDeliveryNonce = deliveryNonce;
         lastConfirmSigHash = keccak256(sig);
     }
 
-    function releaseBond(bytes32 memoId) external override {
-        releaseBondCalled = true;
-        lastReleasedMemoId = memoId;
+    function releaseCollateral(uint256 settlementJobId) external override {
+        releaseCollateralCalled = true;
+        lastReleasedSettlementJobId = settlementJobId;
 
-        uint256 amount = lockedBondByMemo[memoId];
-        lockedBondByMemo[memoId] = 0;
+        uint256 amount = lockedCollateralBySettlementJobId[settlementJobId];
+        lockedCollateralBySettlementJobId[settlementJobId] = 0;
 
         if (amount > 0) {
             usdc.safeTransfer(msg.sender, amount);
         }
     }
 
-    function claimTimeout(bytes32 memoId) external override {
+    function claimTimeout(uint256 settlementJobId) external override {
         claimTimeoutCalled = true;
-        lastTimeoutMemoId = memoId;
+        lastTimeoutSettlementJobId = settlementJobId;
     }
 
     function slash(SlashAttestation calldata attestation, bytes calldata slashSig) external override {

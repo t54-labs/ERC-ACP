@@ -2,6 +2,12 @@
 pragma solidity ^0.8.20;
 
 library MCUTypes {
+    enum FlowKind {
+        SingleStage,
+        TwoStageOpen,
+        TwoStageClose
+    }
+
     enum SidecarState {
         None,
         Committed,
@@ -11,7 +17,7 @@ library MCUTypes {
         EvidenceSubmitted,
         SuccessPendingConfirmation,
         SuccessDisputeOpen,
-        SuccessPendingBondRelease,
+        SuccessPendingCollateralRelease,
         SuccessSettled,
         SuccessSlashed,
         RejectPendingSlash,
@@ -21,17 +27,16 @@ library MCUTypes {
     }
 
     enum SuccessDisputeOutcome {
-        ReleaseBond,
-        SlashBond
+        ReleaseCollateral,
+        SlashCollateral
     }
 
     struct MCUCommit {
-        bytes32 memoId;
         uint256 parentJobId;
         address underwriter;
         address merchantExecutionWallet;
         uint256 decisionFeeUsdc;
-        uint256 requiredBondUsdc;
+        uint256 requiredCollateralUsdc;
         uint256 fundedPrincipalUsdc;
         uint256 coverageCapUsdc;
         uint64 validUntil;
@@ -39,7 +44,6 @@ library MCUTypes {
         uint64 unlockAt;
         uint64 deliveryConfirmationTimeoutWindow;
         bytes32 policyHash;
-        bytes32 parentMemoId;
         bytes32 quoteIdHash;
         bool releasePrincipal;
     }
@@ -53,19 +57,13 @@ library MCUTypes {
         bytes32 policyHash;
     }
 
-    struct CompleteContext {
-        bytes32 memoId;
-    }
-
     struct RejectContext {
-        bytes32 memoId;
         bytes32 slashAttestationHash;
         bytes32 reasonCode;
     }
 
     struct SuccessDisputeDecision {
         uint256 jobId;
-        bytes32 memoId;
         bytes32 disputeHash;
         SuccessDisputeOutcome outcome;
         bytes32 reason;

@@ -4,9 +4,9 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "./IBondManager.sol";
+import "./ICollateralManager.sol";
 
-contract MCUJobAdapter is ReentrancyGuard {
+contract MCUSettlementEscrow is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     error OnlyController();
@@ -17,31 +17,33 @@ contract MCUJobAdapter is ReentrancyGuard {
     error PermitMismatch();
 
     IERC20 public immutable usdc;
-    IBondManager public immutable bondManager;
+    ICollateralManager public immutable collateralManager;
     address public immutable controller;
 
     uint256 public jobId;
     address public client;
     address public provider;
     address public merchantExecutionWallet;
-    bytes32 public memoId;
+    uint256 public settlementJobId;
     bool public configured;
 
-    event AdapterConfigured(
+    event EscrowConfigured(
         uint256 indexed jobId,
         address indexed client,
         address indexed provider,
-        bytes32 memoId,
+        uint256 settlementJobId,
         address merchantExecutionWallet
     );
-    event BondPullRequested(uint256 indexed jobId, address indexed provider, uint256 amount);
+    event CollateralPullRequested(uint256 indexed jobId, address indexed provider, uint256 amount);
     event PrincipalPullRequested(uint256 indexed jobId, address indexed client, uint256 amount);
-    event BondLockRequested(uint256 indexed jobId, bytes32 indexed memoId);
-    event PrincipalReleaseRequested(uint256 indexed jobId, bytes32 indexed memoId, uint256 amount);
-    event DeliveryConfirmationRequested(uint256 indexed jobId, bytes32 indexed memoId, uint256 deliveryNonce);
-    event BondReleaseRequested(uint256 indexed jobId, bytes32 indexed memoId);
-    event BondSlashRequested(uint256 indexed jobId, bytes32 indexed memoId, uint256 slashAmountUsdc, bytes32 reasonCode);
-    event TimeoutClaimRequested(uint256 indexed jobId, bytes32 indexed memoId);
+    event CollateralLockRequested(uint256 indexed jobId, uint256 indexed settlementJobId);
+    event PrincipalReleaseRequested(uint256 indexed jobId, uint256 indexed settlementJobId, uint256 amount);
+    event DeliveryConfirmationRequested(uint256 indexed jobId, uint256 indexed settlementJobId, uint256 deliveryNonce);
+    event CollateralReleaseRequested(uint256 indexed jobId, uint256 indexed settlementJobId);
+    event CollateralSlashRequested(
+        uint256 indexed jobId, uint256 indexed settlementJobId, uint256 slashAmountUsdc, bytes32 reasonCode
+    );
+    event TimeoutClaimRequested(uint256 indexed jobId, uint256 indexed settlementJobId);
     event ResidualSweepRequested(uint256 indexed jobId, address indexed provider);
 
     modifier onlyController() {
@@ -54,29 +56,29 @@ contract MCUJobAdapter is ReentrancyGuard {
         _;
     }
 
-    constructor(address usdc_, IBondManager bondManager_, address controller_) {
-        if (usdc_ == address(0) || address(bondManager_) == address(0) || controller_ == address(0)) {
+    constructor(address usdc_, ICollateralManager collateralManager_, address controller_) {
+        if (usdc_ == address(0) || address(collateralManager_) == address(0) || controller_ == address(0)) {
             revert InvalidConfig();
         }
 
         usdc = IERC20(usdc_);
-        bondManager = bondManager_;
+        collateralManager = collateralManager_;
         controller = controller_;
 
-        // BondManager pulls bond/principal from the adapter, so pre-approve it once.
-        usdc.forceApprove(address(bondManager_), type(uint256).max);
+        // CollateralManager pulls collateral/principal from the escrow, so pre-approve it once.
+        usdc.forceApprove(address(collateralManager_), type(uint256).max);
     }
 
     function configure(
         uint256 jobId_,
         address client_,
         address provider_,
-        bytes32 memoId_,
+        uint256 settlementJobId_,
         address merchantExecutionWallet_
     ) external onlyController {
         if (configured) revert AlreadyConfigured();
         if (
-            client_ == address(0) || provider_ == address(0) || memoId_ == bytes32(0)
+            client_ == address(0) || provider_ == address(0) || settlementJobId_ == 0
                 || merchantExecutionWallet_ == address(0)
         ) {
             revert InvalidConfig();
@@ -86,18 +88,18 @@ contract MCUJobAdapter is ReentrancyGuard {
         jobId = jobId_;
         client = client_;
         provider = provider_;
-        memoId = memoId_;
+        settlementJobId = settlementJobId_;
         merchantExecutionWallet = merchantExecutionWallet_;
 
-        emit AdapterConfigured(jobId_, client_, provider_, memoId_, merchantExecutionWallet_);
+        emit EscrowConfigured(jobId_, client_, provider_, settlementJobId_, merchantExecutionWallet_);
     }
 
-    function pullBondFromProvider(uint256 amount) external onlyController nonReentrant {
+    function pullCollateralFromProvider(uint256 amount) external onlyController nonReentrant {
         _requireConfigured();
         if (amount > 0) {
             usdc.safeTransferFrom(provider, address(this), amount);
         }
-        emit BondPullRequested(jobId, provider, amount);
+        emit CollateralPullRequested(jobId, provider, amount);
     }
 
     function pullPrincipalFromClient(uint256 amount) external onlyController nonReentrant {
@@ -108,7 +110,7 @@ contract MCUJobAdapter is ReentrancyGuard {
         emit PrincipalPullRequested(jobId, client, amount);
     }
 
-    function lockBond(IBondManager.UnderwritePermit calldata permit, bytes calldata permitSig)
+    function lockCollateral(ICollateralManager.UnderwritePermit calldata permit, bytes calldata permitSig)
         external
         onlyController
         nonReentrant
@@ -116,11 +118,11 @@ contract MCUJobAdapter is ReentrancyGuard {
         _requireConfigured();
         _assertPermitMatches(permit);
 
-        bondManager.lockBond(permit, permit.user, permit.unlockAt, permitSig);
-        emit BondLockRequested(jobId, memoId);
+        collateralManager.lockCollateral(permit, permit.user, permit.unlockAt, permitSig);
+        emit CollateralLockRequested(jobId, settlementJobId);
     }
 
-    function releasePrincipal(IBondManager.UnderwritePermit calldata permit, bytes calldata permitSig)
+    function releasePrincipal(ICollateralManager.UnderwritePermit calldata permit, bytes calldata permitSig)
         external
         onlyController
         nonReentrant
@@ -128,22 +130,22 @@ contract MCUJobAdapter is ReentrancyGuard {
         _requireConfigured();
         _assertPermitMatches(permit);
 
-        bondManager.releasePrincipalToMerchant(permit, permitSig);
-        emit PrincipalReleaseRequested(jobId, memoId, permit.fundedPrincipalUsdc);
+        collateralManager.releasePrincipalToMerchant(permit, permitSig);
+        emit PrincipalReleaseRequested(jobId, settlementJobId, permit.fundedPrincipalUsdc);
     }
 
     function confirmDeliveryBySig(uint256 deliveryNonce, bytes calldata sig) external onlyController nonReentrant {
         _requireConfigured();
 
-        bondManager.confirmDeliveryBySig(memoId, deliveryNonce, sig);
-        emit DeliveryConfirmationRequested(jobId, memoId, deliveryNonce);
+        collateralManager.confirmDeliveryBySig(settlementJobId, deliveryNonce, sig);
+        emit DeliveryConfirmationRequested(jobId, settlementJobId, deliveryNonce);
     }
 
-    function releaseBondAndForward() external onlyController nonReentrant {
+    function releaseCollateralAndForward() external onlyController nonReentrant {
         _requireConfigured();
 
         uint256 balanceBefore = usdc.balanceOf(address(this));
-        bondManager.releaseBond(memoId);
+        collateralManager.releaseCollateral(settlementJobId);
         uint256 balanceAfter = usdc.balanceOf(address(this));
         uint256 releasedAmount = balanceAfter - balanceBefore;
 
@@ -151,28 +153,28 @@ contract MCUJobAdapter is ReentrancyGuard {
             usdc.safeTransfer(provider, releasedAmount);
         }
 
-        emit BondReleaseRequested(jobId, memoId);
+        emit CollateralReleaseRequested(jobId, settlementJobId);
     }
 
-    function slashBond(IBondManager.SlashAttestation calldata attestation, bytes calldata slashSig)
+    function slashCollateral(ICollateralManager.SlashAttestation calldata attestation, bytes calldata slashSig)
         external
         onlyController
         nonReentrant
     {
         _requireConfigured();
-        if (attestation.jobId != jobId || attestation.memoId != memoId || attestation.safe != address(this)) {
+        if (attestation.settlementJobId != settlementJobId || attestation.safe != address(this)) {
             revert PermitMismatch();
         }
 
-        bondManager.slash(attestation, slashSig);
-        emit BondSlashRequested(jobId, memoId, attestation.slashAmountUsdc, attestation.reasonCode);
+        collateralManager.slash(attestation, slashSig);
+        emit CollateralSlashRequested(jobId, settlementJobId, attestation.slashAmountUsdc, attestation.reasonCode);
     }
 
     function claimTimeout() external onlyController nonReentrant {
         _requireConfigured();
 
-        bondManager.claimTimeout(memoId);
-        emit TimeoutClaimRequested(jobId, memoId);
+        collateralManager.claimTimeout(settlementJobId);
+        emit TimeoutClaimRequested(jobId, settlementJobId);
     }
 
     function sweepResidualToProvider() external onlyControllerOrProvider nonReentrant {
@@ -190,9 +192,9 @@ contract MCUJobAdapter is ReentrancyGuard {
         if (!configured) revert NotConfigured();
     }
 
-    function _assertPermitMatches(IBondManager.UnderwritePermit calldata permit) internal view {
+    function _assertPermitMatches(ICollateralManager.UnderwritePermit calldata permit) internal view {
         if (
-            permit.jobId != jobId || permit.memoId != memoId || permit.safe != address(this)
+            permit.jobId != jobId || permit.settlementJobId != settlementJobId || permit.safe != address(this)
                 || permit.merchant != address(this) || permit.user != client
                 || permit.merchantExecutionWallet != merchantExecutionWallet
         ) {

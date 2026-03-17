@@ -7,18 +7,20 @@ import "../../contracts/mcu/MCUHookLite.sol";
 import "../../contracts/mcu/IAgenticCommerceKernel.sol";
 import "../../contracts/mcu/MCUTypes.sol";
 
-interface IMCUHookLiteLinkageView {
-    function getJobIdByMemoId(bytes32 memoId) external view returns (uint256);
+interface IMCUHookLiteFlowAdminView {
+    function jobSettlementJobId(uint256 jobId) external view returns (uint256);
     function getParentJobId(uint256 jobId) external view returns (uint256);
     function getCloseJobId(uint256 jobId) external view returns (uint256);
+    function jobFlowKind(uint256 jobId) external view returns (uint8);
+    function registerUnderwriter(address underwriter) external;
+    function unregisterUnderwriter(address underwriter) external;
+    function isRegisteredUnderwriter(address underwriter) external view returns (bool);
 }
 
 contract MockHookACP is IAgenticCommerceKernel {
     address public override paymentToken;
     mapping(uint256 jobId => Job) internal jobs;
     mapping(uint256 jobId => JobKind) internal jobKinds;
-    mapping(uint256 jobId => uint256) internal parentJobIdByCloseJobId;
-    mapping(uint256 jobId => uint256) internal closeJobIdByParentJobId;
 
     constructor(address paymentToken_) {
         paymentToken = paymentToken_;
@@ -30,11 +32,6 @@ contract MockHookACP is IAgenticCommerceKernel {
 
     function setJobKind(uint256 jobId, JobKind kind) external {
         jobKinds[jobId] = kind;
-    }
-
-    function linkCloseJob(uint256 parentJobId, uint256 closeJobId) external {
-        parentJobIdByCloseJobId[closeJobId] = parentJobId;
-        closeJobIdByParentJobId[parentJobId] = closeJobId;
     }
 
     function callBeforeAction(address hook, uint256 jobId, bytes4 selector, bytes calldata data) external {
@@ -53,12 +50,12 @@ contract MockHookACP is IAgenticCommerceKernel {
         return jobKinds[jobId];
     }
 
-    function getParentJobId(uint256 jobId) external view override returns (uint256) {
-        return parentJobIdByCloseJobId[jobId];
+    function getParentJobId(uint256) external pure override returns (uint256) {
+        return 0;
     }
 
-    function getCloseJobId(uint256 jobId) external view override returns (uint256) {
-        return closeJobIdByParentJobId[jobId];
+    function getCloseJobId(uint256) external pure override returns (uint256) {
+        return 0;
     }
 
     function setProvider(uint256, address, bytes calldata) external pure override {
@@ -92,23 +89,31 @@ contract MCUHookLiteTest is Test {
     bytes4 internal constant SEL_SUBMIT = bytes4(keccak256("submit(uint256,bytes32,bytes)"));
     bytes4 internal constant SEL_COMPLETE = bytes4(keccak256("complete(uint256,bytes32,bytes)"));
     bytes4 internal constant SEL_REJECT = bytes4(keccak256("reject(uint256,bytes32,bytes)"));
-    uint256 internal constant STATE_AWAITING_CLOSE = 4;
+
+    bytes4 internal constant UNDERWRITER_NOT_REGISTERED_SELECTOR =
+        bytes4(keccak256("UnderwriterNotRegistered()"));
+    bytes4 internal constant UNSUPPORTED_JOB_KIND_SELECTOR = bytes4(keccak256("UnsupportedJobKind()"));
+
+    uint8 internal constant FLOW_SINGLE_STAGE = 0;
+    uint8 internal constant FLOW_TWO_STAGE_OPEN = 1;
+    uint8 internal constant FLOW_TWO_STAGE_CLOSE = 2;
+
     uint256 internal constant OPEN_JOB_ID = 1;
     uint256 internal constant CLOSE_JOB_ID = 2;
-    uint256 internal constant BAD_CLOSE_JOB_ID = 3;
-    uint256 internal constant UNLINKED_CLOSE_JOB_ID = 4;
-    bytes32 internal constant OPEN_MEMO_ID = keccak256("open-memo-id");
-    bytes32 internal constant CLOSE_MEMO_ID = keccak256("close-memo-id");
+    uint256 internal constant SINGLE_STAGE_JOB_ID = 3;
+    uint256 internal constant BAD_CLOSE_JOB_ID = 4;
+    uint256 internal constant LEGACY_CLOSE_JOB_ID = 5;
+    uint256 internal constant REPLACEMENT_CLOSE_JOB_ID = 6;
+
     bytes32 internal constant SUCCESS_DISPUTE_HASH = keccak256("success-dispute");
     bytes32 internal constant SLASH_ATTESTATION_HASH = keccak256("slash-attestation");
 
     struct FutureCommit {
-        bytes32 memoId;
         uint256 parentJobId;
         address underwriter;
         address merchantExecutionWallet;
         uint256 decisionFeeUsdc;
-        uint256 requiredBondUsdc;
+        uint256 requiredCollateralUsdc;
         uint256 fundedPrincipalUsdc;
         uint256 coverageCapUsdc;
         uint64 validUntil;
@@ -116,7 +121,6 @@ contract MCUHookLiteTest is Test {
         uint64 unlockAt;
         uint64 deliveryConfirmationTimeoutWindow;
         bytes32 policyHash;
-        bytes32 parentMemoId;
         bytes32 quoteIdHash;
         bool releasePrincipal;
     }
@@ -143,106 +147,156 @@ contract MCUHookLiteTest is Test {
 
         acp.setJob(_job(OPEN_JOB_ID, provider));
         acp.setJob(_job(CLOSE_JOB_ID, provider));
+        acp.setJob(_job(SINGLE_STAGE_JOB_ID, provider));
         acp.setJob(_job(BAD_CLOSE_JOB_ID, otherProvider));
-        acp.setJob(_job(UNLINKED_CLOSE_JOB_ID, provider));
+        acp.setJob(_job(LEGACY_CLOSE_JOB_ID, provider));
+        acp.setJob(_job(REPLACEMENT_CLOSE_JOB_ID, provider));
+
         acp.setJobKind(OPEN_JOB_ID, IAgenticCommerceKernel.JobKind.Open);
-        acp.setJobKind(CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
-        acp.setJobKind(BAD_CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
-        acp.setJobKind(UNLINKED_CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
-        acp.linkCloseJob(OPEN_JOB_ID, CLOSE_JOB_ID);
+        acp.setJobKind(CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Standalone);
+        acp.setJobKind(SINGLE_STAGE_JOB_ID, IAgenticCommerceKernel.JobKind.Standalone);
+        acp.setJobKind(BAD_CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Standalone);
+        acp.setJobKind(LEGACY_CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Close);
+        acp.setJobKind(REPLACEMENT_CLOSE_JOB_ID, IAgenticCommerceKernel.JobKind.Standalone);
     }
 
-    function testCloseCommitLinksToParentJobAndBackfillsParentMemoId() public {
+    function testSingleStageCommitRequiresRegisteredUnderwriter() public {
+        vm.expectRevert(UNDERWRITER_NOT_REGISTERED_SELECTOR);
+        acp.callBeforeAction(
+            address(hook), SINGLE_STAGE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(0))
+        );
+    }
+
+    function testRegisteredUnderwriterSingleStageCommitStoresSingleStageFlowKind() public {
+        _registerUnderwriter();
+
+        acp.callBeforeAction(
+            address(hook), SINGLE_STAGE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(0))
+        );
+
+        assertTrue(_flowView().isRegisteredUnderwriter(underwriter));
+        assertEq(_flowView().jobFlowKind(SINGLE_STAGE_JOB_ID), FLOW_SINGLE_STAGE);
+        assertEq(_flowView().getParentJobId(SINGLE_STAGE_JOB_ID), 0);
+        assertEq(_flowView().getCloseJobId(SINGLE_STAGE_JOB_ID), 0);
+        assertEq(_flowView().jobSettlementJobId(SINGLE_STAGE_JOB_ID), SINGLE_STAGE_JOB_ID);
+    }
+
+    function testTwoStageOpenCommitStoresTwoStageOpenFlowKind() public {
+        _registerUnderwriter();
+
+        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(0)));
+
+        assertEq(_flowView().jobFlowKind(OPEN_JOB_ID), FLOW_TWO_STAGE_OPEN);
+    }
+
+    function testTwoStageCloseCommitLinksToParentSettlementJobIdWithoutCoreLinkage() public {
+        _registerUnderwriter();
         _commitOpenJob();
         _completeOpenJobReadyForClose();
 
         acp.callBeforeAction(
-            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
+            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_JOB_ID))
         );
 
-        assertEq(IMCUHookLiteLinkageView(address(hook)).getParentJobId(CLOSE_JOB_ID), OPEN_JOB_ID);
-        assertEq(IMCUHookLiteLinkageView(address(hook)).getCloseJobId(OPEN_JOB_ID), CLOSE_JOB_ID);
-        assertEq(IMCUHookLiteLinkageView(address(hook)).getJobIdByMemoId(OPEN_MEMO_ID), OPEN_JOB_ID);
-        assertEq(IMCUHookLiteLinkageView(address(hook)).getJobIdByMemoId(CLOSE_MEMO_ID), CLOSE_JOB_ID);
+        assertEq(_flowView().jobFlowKind(CLOSE_JOB_ID), FLOW_TWO_STAGE_CLOSE);
+        assertEq(_flowView().getParentJobId(CLOSE_JOB_ID), OPEN_JOB_ID);
+        assertEq(_flowView().getCloseJobId(OPEN_JOB_ID), CLOSE_JOB_ID);
+        assertEq(_flowView().jobSettlementJobId(OPEN_JOB_ID), OPEN_JOB_ID);
+        assertEq(_flowView().jobSettlementJobId(CLOSE_JOB_ID), OPEN_JOB_ID);
 
-        (bool ok, bytes memory returndata) =
-            address(hook).staticcall(abi.encodeWithSignature("getCommit(uint256)", CLOSE_JOB_ID));
-        assertTrue(ok);
-
-        FutureCommit memory commit = abi.decode(returndata, (FutureCommit));
+        FutureCommit memory commit = abi.decode(abi.encode(hook.getCommit(CLOSE_JOB_ID)), (FutureCommit));
         assertEq(commit.parentJobId, OPEN_JOB_ID);
-        assertEq(commit.parentMemoId, OPEN_MEMO_ID);
+        assertEq(commit.unlockAt, _commit(0).unlockAt);
     }
 
-    function testCloseCommitRevertsWhenProviderDiffersFromParent() public {
+    function testTwoStageCloseCommitWorksAfterUnderwriterRemovedFromRegistryWhenParentMatches() public {
+        _registerUnderwriter();
         _commitOpenJob();
         _completeOpenJobReadyForClose();
-        acp.linkCloseJob(OPEN_JOB_ID, BAD_CLOSE_JOB_ID);
+
+        vm.prank(admin);
+        _flowView().unregisterUnderwriter(underwriter);
+
+        acp.callBeforeAction(
+            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_JOB_ID))
+        );
+
+        assertEq(_flowView().jobFlowKind(CLOSE_JOB_ID), FLOW_TWO_STAGE_CLOSE);
+        assertFalse(_flowView().isRegisteredUnderwriter(underwriter));
+    }
+
+    function testTwoStageCloseCommitRevertsWhenProviderDiffersFromParent() public {
+        _registerUnderwriter();
+        _commitOpenJob();
+        _completeOpenJobReadyForClose();
 
         vm.expectRevert(MCUHookLite.InvalidParentJob.selector);
         acp.callBeforeAction(
             address(hook),
             BAD_CLOSE_JOB_ID,
             SEL_SET_BUDGET,
-            _setBudgetData(_commit(keccak256("bad-close-memo-id"), OPEN_JOB_ID, bytes32(0)))
+            _setBudgetData(_commit(OPEN_JOB_ID))
         );
     }
 
-    function testCloseCommitRevertsWhenACPDoesNotLinkJobToParent() public {
+    function testTwoStageCloseCommitRevertsUntilParentJobIsCompletedAndAwaitingClose() public {
+        _registerUnderwriter();
+        _commitOpenJob();
+
+        vm.expectRevert(MCUHookLite.InvalidState.selector);
+        acp.callBeforeAction(
+            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_JOB_ID))
+        );
+    }
+
+    function testLegacyCoreCloseJobKindIsRejectedByMCUHook() public {
+        _registerUnderwriter();
         _commitOpenJob();
         _completeOpenJobReadyForClose();
 
-        vm.expectRevert(MCUHookLite.InvalidParentJob.selector);
+        vm.expectRevert(UNSUPPORTED_JOB_KIND_SELECTOR);
         acp.callBeforeAction(
             address(hook),
-            UNLINKED_CLOSE_JOB_ID,
+            LEGACY_CLOSE_JOB_ID,
             SEL_SET_BUDGET,
-            _setBudgetData(_commit(keccak256("unlinked-close-memo-id"), OPEN_JOB_ID, bytes32(0)))
+            _setBudgetData(_commit(OPEN_JOB_ID))
         );
     }
 
-    function testCloseCommitRevertsUntilParentJobIsCompletedAndAwaitingClose() public {
+    function testOpenJobCompleteTransitionsToAwaitingCloseWithoutSubmit() public {
+        _registerUnderwriter();
         _commitOpenJob();
+        _completeOpenJobReadyForClose();
 
-        vm.expectRevert(MCUHookLite.InvalidState.selector);
-        acp.callBeforeAction(
-            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
+        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), uint256(MCUTypes.SidecarState.AwaitingClose));
+        assertEq(hook.jobCompletionObservedAt(OPEN_JOB_ID), 0);
+    }
+
+    function testSingleStageSettlementWindowStartsWhenProviderRequestsReleaseAndThenAllowsClientDispute() public {
+        _registerUnderwriter();
+        _completeSingleStageJobWithoutSettlement();
+
+        assertEq(uint256(hook.jobSidecarState(SINGLE_STAGE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessPendingConfirmation));
+        assertEq(hook.jobDeliveryConfirmationDeadline(SINGLE_STAGE_JOB_ID), 0);
+
+        uint64 requestTime = uint64(block.timestamp);
+        vm.prank(coordinator);
+        hook.markSuccessPendingCollateralRelease(SINGLE_STAGE_JOB_ID);
+
+        assertEq(
+            hook.jobDeliveryConfirmationDeadline(SINGLE_STAGE_JOB_ID),
+            requestTime + _commit(0).deliveryConfirmationTimeoutWindow
         );
-    }
-
-    function testCloseCommitRevertsWhenParentJobIsCompletedButOpenHookDidNotObserveCompletion() public {
-        _commitOpenJob();
-        _protectOpenJob();
-        acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Completed));
-
-        vm.expectRevert(MCUHookLite.InvalidState.selector);
-        acp.callBeforeAction(
-            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
-        );
-    }
-
-    function testCloseFundRevertsWhenParentAwaitingCloseButAcpStatusIsNotCompleted() public {
-        _commitOpenAndCloseJobs();
-        acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Funded));
-
-        vm.expectRevert(MCUHookLite.InvalidState.selector);
-        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
-    }
-
-    function testCloseSubmitRevertsWhenParentLeavesReadyStateAfterCloseCommit() public {
-        _commitOpenAndCloseJobs();
-        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
 
         vm.prank(coordinator);
-        hook.markProtected(CLOSE_JOB_ID, adapter);
+        hook.markSuccessDisputeOpen(SINGLE_STAGE_JOB_ID, SUCCESS_DISPUTE_HASH);
 
-        acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Funded));
-
-        vm.expectRevert(MCUHookLite.InvalidState.selector);
-        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_SUBMIT, bytes(""));
+        assertEq(uint256(hook.jobSidecarState(SINGLE_STAGE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessDisputeOpen));
+        assertEq(hook.jobLastSuccessDisputeHash(SINGLE_STAGE_JOB_ID), SUCCESS_DISPUTE_HASH);
     }
 
-    function testCloseFundAndSubmitAllowedOnceParentJobIsCompletedAndAwaitingClose() public {
+    function testTwoStageCloseFundAndSubmitAllowedOnceParentJobIsCompletedAndAwaitingClose() public {
+        _registerUnderwriter();
         _commitOpenAndCloseJobs();
 
         acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
@@ -254,58 +308,27 @@ contract MCUHookLiteTest is Test {
         acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_SUBMIT, _submitActionData());
     }
 
-    function testOpenJobCompleteTransitionsToAwaitingCloseWithoutSubmit() public {
-        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_MEMO_ID, 0, bytes32(0))));
-        _completeOpenJobReadyForClose();
-
-        assertEq(uint256(hook.jobSidecarState(OPEN_JOB_ID)), STATE_AWAITING_CLOSE);
-        assertEq(hook.jobCompletionObservedAt(OPEN_JOB_ID), 0);
-    }
-
-    function testCloseCompleteSetsDeliveryConfirmationDeadlineAndAllowsSuccessDisputeOpen() public {
-        _commitOpenAndCloseJobs();
-        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
-        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
-
-        vm.prank(coordinator);
-        hook.markProtected(CLOSE_JOB_ID, adapter);
-
-        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_SUBMIT, _submitActionData());
-        acp.setJob(_job(CLOSE_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Completed));
-
-        uint64 completionTime = uint64(block.timestamp);
-        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_COMPLETE, _completeActionData());
-
-        assertEq(hook.jobCompletionObservedAt(CLOSE_JOB_ID), completionTime);
-        assertEq(
-            hook.jobDeliveryConfirmationDeadline(CLOSE_JOB_ID),
-            completionTime + _commit(OPEN_MEMO_ID, 0, bytes32(0)).deliveryConfirmationTimeoutWindow
-        );
-
-        vm.prank(coordinator);
-        hook.markSuccessDisputeOpen(CLOSE_JOB_ID, SUCCESS_DISPUTE_HASH);
-
-        assertEq(uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessDisputeOpen));
-        assertEq(hook.jobLastSuccessDisputeHash(CLOSE_JOB_ID), SUCCESS_DISPUTE_HASH);
-    }
-
-    function testCloseSuccessPendingBondReleaseCanBeEnteredFromSuccessDisputeOpen() public {
+    function testTwoStageCloseSuccessPendingCollateralReleaseCanBeEnteredFromSuccessDisputeOpen() public {
+        _registerUnderwriter();
         _completeCloseJobWithoutSettlement();
 
         vm.startPrank(coordinator);
+        hook.markSuccessPendingCollateralRelease(CLOSE_JOB_ID);
         hook.markSuccessDisputeOpen(CLOSE_JOB_ID, SUCCESS_DISPUTE_HASH);
-        hook.markSuccessPendingBondRelease(CLOSE_JOB_ID);
+        hook.markSuccessPendingCollateralRelease(CLOSE_JOB_ID);
         vm.stopPrank();
 
         assertEq(
-            uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessPendingBondRelease)
+            uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessPendingCollateralRelease)
         );
     }
 
-    function testCloseSuccessDisputeCanBeMarkedSlashed() public {
+    function testTwoStageCloseSuccessDisputeCanBeMarkedSlashed() public {
+        _registerUnderwriter();
         _completeCloseJobWithoutSettlement();
 
         vm.startPrank(coordinator);
+        hook.markSuccessPendingCollateralRelease(CLOSE_JOB_ID);
         hook.markSuccessDisputeOpen(CLOSE_JOB_ID, SUCCESS_DISPUTE_HASH);
         hook.markSuccessSlashed(CLOSE_JOB_ID, SUCCESS_DISPUTE_HASH, SLASH_ATTESTATION_HASH);
         vm.stopPrank();
@@ -313,7 +336,8 @@ contract MCUHookLiteTest is Test {
         assertEq(uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.SuccessSlashed));
     }
 
-    function testCloseRejectAcceptsParentSettlementMemo() public {
+    function testTwoStageCloseRejectUsesParentSettlementJobIdAndClearsActiveLinkageWhenSettled() public {
+        _registerUnderwriter();
         _commitOpenAndCloseJobs();
         acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
         acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
@@ -325,6 +349,61 @@ contract MCUHookLiteTest is Test {
         acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_REJECT, _rejectActionData());
 
         assertEq(uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.RejectPendingSlash));
+
+        vm.prank(coordinator);
+        hook.markRejectSettled(CLOSE_JOB_ID);
+
+        assertEq(_flowView().getCloseJobId(OPEN_JOB_ID), 0);
+    }
+
+    function testTwoStageCloseOpenStateRejectClearsActiveLinkageImmediately() public {
+        _registerUnderwriter();
+        _commitOpenAndCloseJobs();
+
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_REJECT, _rejectActionData());
+
+        assertEq(uint256(hook.jobSidecarState(CLOSE_JOB_ID)), uint256(MCUTypes.SidecarState.RejectSettled));
+        assertEq(_flowView().getCloseJobId(OPEN_JOB_ID), 0);
+
+        acp.callBeforeAction(
+            address(hook),
+            REPLACEMENT_CLOSE_JOB_ID,
+            SEL_SET_BUDGET,
+            _setBudgetData(_commit(OPEN_JOB_ID))
+        );
+
+        assertEq(_flowView().getCloseJobId(OPEN_JOB_ID), REPLACEMENT_CLOSE_JOB_ID);
+    }
+
+    function testTwoStageCloseExpirySettlementClearsActiveLinkage() public {
+        _registerUnderwriter();
+        _commitOpenAndCloseJobs();
+        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+
+        vm.prank(coordinator);
+        hook.markExpirySettled(CLOSE_JOB_ID);
+
+        assertEq(_flowView().getCloseJobId(OPEN_JOB_ID), 0);
+    }
+
+    function testTwoStageCloseReplacementCanBeCommittedAfterPriorCloseSettledAway() public {
+        _registerUnderwriter();
+        _commitOpenAndCloseJobs();
+        acp.callBeforeAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+        acp.callAfterAction(address(hook), CLOSE_JOB_ID, SEL_FUND, bytes(""));
+
+        vm.prank(coordinator);
+        hook.markExpirySettled(CLOSE_JOB_ID);
+
+        acp.callBeforeAction(
+            address(hook),
+            REPLACEMENT_CLOSE_JOB_ID,
+            SEL_SET_BUDGET,
+            _setBudgetData(_commit(OPEN_JOB_ID))
+        );
+
+        assertEq(_flowView().getCloseJobId(OPEN_JOB_ID), REPLACEMENT_CLOSE_JOB_ID);
     }
 
     function _job(uint256 jobId, address provider_) internal view returns (IAgenticCommerceKernel.Job memory) {
@@ -349,18 +428,13 @@ contract MCUHookLiteTest is Test {
         });
     }
 
-    function _commit(bytes32 memoId, uint256 parentJobId, bytes32 parentMemoId)
-        internal
-        view
-        returns (FutureCommit memory)
-    {
+    function _commit(uint256 parentJobId) internal view returns (FutureCommit memory) {
         return FutureCommit({
-            memoId: memoId,
             parentJobId: parentJobId,
             underwriter: underwriter,
             merchantExecutionWallet: merchantExecutionWallet,
             decisionFeeUsdc: 5e6,
-            requiredBondUsdc: 100e6,
+            requiredCollateralUsdc: 100e6,
             fundedPrincipalUsdc: 80e6,
             coverageCapUsdc: 100e6,
             validUntil: uint64(block.timestamp + 1 days),
@@ -368,10 +442,18 @@ contract MCUHookLiteTest is Test {
             unlockAt: uint64(block.timestamp + 3 days),
             deliveryConfirmationTimeoutWindow: uint64(2 days),
             policyHash: keccak256("policy"),
-            parentMemoId: parentMemoId,
             quoteIdHash: keccak256("quote"),
             releasePrincipal: true
         });
+    }
+
+    function _flowView() internal view returns (IMCUHookLiteFlowAdminView) {
+        return IMCUHookLiteFlowAdminView(address(hook));
+    }
+
+    function _registerUnderwriter() internal {
+        vm.prank(admin);
+        _flowView().registerUnderwriter(underwriter);
     }
 
     function _setBudgetData(FutureCommit memory commit) internal pure returns (bytes memory) {
@@ -379,14 +461,23 @@ contract MCUHookLiteTest is Test {
     }
 
     function _commitOpenJob() internal {
-        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_MEMO_ID, 0, bytes32(0))));
+        acp.callBeforeAction(address(hook), OPEN_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(0)));
+    }
+
+    function _commitSingleStageJob() internal {
+        acp.callBeforeAction(
+            address(hook),
+            SINGLE_STAGE_JOB_ID,
+            SEL_SET_BUDGET,
+            _setBudgetData(_commit(0))
+        );
     }
 
     function _commitOpenAndCloseJobs() internal {
         _commitOpenJob();
         _completeOpenJobReadyForClose();
         acp.callBeforeAction(
-            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(CLOSE_MEMO_ID, OPEN_JOB_ID, bytes32(0)))
+            address(hook), CLOSE_JOB_ID, SEL_SET_BUDGET, _setBudgetData(_commit(OPEN_JOB_ID))
         );
     }
 
@@ -401,6 +492,19 @@ contract MCUHookLiteTest is Test {
         _protectOpenJob();
         acp.setJob(_job(OPEN_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Completed));
         acp.callAfterAction(address(hook), OPEN_JOB_ID, SEL_COMPLETE, _completeActionData());
+    }
+
+    function _completeSingleStageJobWithoutSettlement() internal {
+        _commitSingleStageJob();
+        acp.callBeforeAction(address(hook), SINGLE_STAGE_JOB_ID, SEL_FUND, bytes(""));
+        acp.callAfterAction(address(hook), SINGLE_STAGE_JOB_ID, SEL_FUND, bytes(""));
+
+        vm.prank(coordinator);
+        hook.markProtected(SINGLE_STAGE_JOB_ID, adapter);
+
+        acp.callAfterAction(address(hook), SINGLE_STAGE_JOB_ID, SEL_SUBMIT, _submitActionData());
+        acp.setJob(_job(SINGLE_STAGE_JOB_ID, provider, IAgenticCommerceKernel.JobStatus.Completed));
+        acp.callAfterAction(address(hook), SINGLE_STAGE_JOB_ID, SEL_COMPLETE, _completeActionData());
     }
 
     function _completeCloseJobWithoutSettlement() internal {
@@ -442,7 +546,6 @@ contract MCUHookLiteTest is Test {
             keccak256("reject-reason"),
             abi.encode(
                 MCUTypes.RejectContext({
-                    memoId: OPEN_MEMO_ID,
                     slashAttestationHash: bytes32(0),
                     reasonCode: keccak256("reject-reason")
                 })
