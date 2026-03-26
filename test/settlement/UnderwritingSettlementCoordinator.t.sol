@@ -71,6 +71,7 @@ contract MockUnderwritingHook {
     address public evaluator;
 
     mapping(uint256 jobId => UnderwritingTypes.SidecarState) internal sidecarStates;
+    mapping(uint256 jobId => bool) internal awaitingCloseByJobId;
     mapping(uint256 jobId => UnderwritingTypes.UnderwriteCommit) internal commits;
     mapping(uint256 jobId => uint256) internal settlementJobIds;
 
@@ -85,12 +86,14 @@ contract MockUnderwritingHook {
         uint256 settlementJobId
     ) external {
         sidecarStates[jobId] = sidecarState;
+        awaitingCloseByJobId[jobId] = sidecarState == UnderwritingTypes.SidecarState.AwaitingClose;
         commits[jobId] = commit;
         settlementJobIds[jobId] = settlementJobId;
     }
 
     function setSidecarState(uint256 jobId, UnderwritingTypes.SidecarState sidecarState) external {
         sidecarStates[jobId] = sidecarState;
+        awaitingCloseByJobId[jobId] = sidecarState == UnderwritingTypes.SidecarState.AwaitingClose;
     }
 
     function getCommit(uint256 jobId) external view returns (UnderwritingTypes.UnderwriteCommit memory) {
@@ -103,6 +106,10 @@ contract MockUnderwritingHook {
 
     function jobSettlementJobId(uint256 jobId) external view returns (uint256) {
         return settlementJobIds[jobId];
+    }
+
+    function isAwaitingClose(uint256 jobId) external view returns (bool) {
+        return awaitingCloseByJobId[jobId];
     }
 
     function markProtected(uint256 jobId) external {
@@ -597,7 +604,7 @@ contract UnderwritingSettlementCoordinatorTest is Test {
             policyHash: keccak256("policy"),
             quoteIdHash: keccak256("quote"),
             termsHash: keccak256("terms"),
-            allowCloseJob: parentJobId == 0
+            allowCloseJob: false
         });
     }
 

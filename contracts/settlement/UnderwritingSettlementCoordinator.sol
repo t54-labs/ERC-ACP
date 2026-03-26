@@ -128,6 +128,7 @@ contract UnderwritingSettlementCoordinator {
         if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.SuccessPendingConfirmation) {
             revert InvalidState();
         }
+        _assertSettlementEntrypointAllowed(jobId);
         if (msg.sender != job.provider) revert OnlyProvider();
 
         SettlementTypes.SettlementState currentState = jobSettlementState[jobId];
@@ -152,6 +153,7 @@ contract UnderwritingSettlementCoordinator {
     function openSuccessDispute(uint256 jobId, bytes32 disputeHash) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
+        _assertSettlementEntrypointAllowed(jobId);
         if (jobSettlementState[jobId] != SettlementTypes.SettlementState.SuccessPendingRelease) revert InvalidState();
         if (block.timestamp >= uint256(releaseRequestedAtByJobId[jobId]) + uint256(disputeWindowSeconds)) {
             revert DisputeWindowExpired();
@@ -212,6 +214,7 @@ contract UnderwritingSettlementCoordinator {
     function releaseCollateral(uint256 jobId) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
+        _assertSettlementEntrypointAllowed(jobId);
 
         SettlementTypes.SettlementState currentState = jobSettlementState[jobId];
         if (
@@ -324,6 +327,14 @@ contract UnderwritingSettlementCoordinator {
                 || permit.validUntil != commit.validUntil || permit.policyHash != commit.policyHash
         ) {
             revert PermitMismatch();
+        }
+    }
+
+    /// @dev Prevents a close-enabled root job from reopening settlement once a close leg has taken over.
+    function _assertSettlementEntrypointAllowed(uint256 jobId) internal view {
+        UnderwritingTypes.UnderwriteCommit memory commit = hook.getCommit(jobId);
+        if (commit.parentJobId == 0 && commit.allowCloseJob && !hook.isAwaitingClose(jobId)) {
+            revert InvalidState();
         }
     }
 }

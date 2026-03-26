@@ -6,6 +6,7 @@ import "../../contracts/AgenticCommerceHooked.sol";
 import "../../contracts/examples/UnderwritingHookSystemExample.sol";
 import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../contracts/settlement/SettlementTypes.sol";
+import "../../contracts/settlement/UnderwritingSettlementCoordinator.sol";
 import "../mocks/MockCollateralManager.sol";
 import "../mocks/MockERC20.sol";
 
@@ -144,7 +145,7 @@ contract UnderwritingHookSystemExampleTest is Test {
         vm.stopPrank();
 
         UnderwritingTypes.UnderwriteCommit memory commit = example.buildCommit(_commitInputs(0, false));
-        UnderwritingHookSystemExample.PermitInputs memory permitInputs = _permitInputs(7);
+        UnderwritingHookSystemExample.PermitInputs memory permitInputs = _permitInputs(7, 0);
         _fundAndOrchestrateJob(jobId, commit, permitInputs, predictedEscrow);
         _submitAndCompleteJob(jobId, commit, "bundle", "approved", 11);
 
@@ -184,8 +185,6 @@ contract UnderwritingHookSystemExampleTest is Test {
             uint256(example.coordinator().jobSettlementState(jobId)),
             uint256(SettlementTypes.SettlementState.ReleaseApproved)
         );
-
-        vm.warp(block.timestamp + uint256(permitInputs.unlockIn) + 1);
 
         uint256 providerBalanceBefore = usdc.balanceOf(provider);
         example.coordinator().releaseCollateral(jobId);
@@ -271,6 +270,55 @@ contract UnderwritingHookSystemExampleTest is Test {
         );
         assertEq(collateralManager.lastReleasedSettlementJobId(), rootJobId);
         assertEq(usdc.balanceOf(provider), providerBalanceBefore + rootPermitInputs.requiredCollateralUsdc);
+    }
+
+    function testTwoStageCloseCompletionRejectsRootReleaseEntry() public {
+        example.registerUnderwriter(underwriter);
+
+        address predictedEscrow = vm.computeCreateAddress(address(example.coordinator()), 1);
+
+        vm.startPrank(client);
+        uint256 rootJobId = acp.createJob(
+            provider,
+            address(example.evaluator()),
+            block.timestamp + 1 days,
+            "underwriting root job",
+            address(example.hook())
+        );
+        vm.stopPrank();
+
+        UnderwritingTypes.UnderwriteCommit memory rootCommit = example.buildCommit(_commitInputs(0, true));
+        _fundAndOrchestrateJob(rootJobId, rootCommit, _permitInputs(7), predictedEscrow);
+        _submitAndCompleteJob(rootJobId, rootCommit, "root bundle", "root approved", 11);
+
+        vm.startPrank(client);
+        uint256 closeJobId = acp.createJob(
+            provider,
+            address(example.evaluator()),
+            block.timestamp + 2 days,
+            "underwriting close job",
+            address(example.hook())
+        );
+        vm.stopPrank();
+
+        UnderwritingTypes.UnderwriteCommit memory closeCommit = example.buildCommit(_commitInputs(rootJobId, false));
+        _fundAndOrchestrateJob(closeJobId, closeCommit, _permitInputs(8), predictedEscrow);
+        _submitAndCompleteJob(closeJobId, closeCommit, "close bundle", "close approved", 12);
+
+        UnderwritingSettlementCoordinator coordinator = example.coordinator();
+
+        vm.prank(provider);
+        vm.expectRevert(UnderwritingSettlementCoordinator.InvalidState.selector);
+        coordinator.requestCollateralRelease(rootJobId);
+
+        assertEq(
+            uint256(example.coordinator().jobSettlementState(rootJobId)),
+            uint256(SettlementTypes.SettlementState.PrincipalReleased)
+        );
+        assertEq(
+            uint256(example.coordinator().jobSettlementState(closeJobId)),
+            uint256(SettlementTypes.SettlementState.None)
+        );
     }
 
     function testTwoStageDisputePathCloseJobSlashUsesParentSettlement() public {
@@ -371,6 +419,14 @@ contract UnderwritingHookSystemExampleTest is Test {
         view
         returns (UnderwritingHookSystemExample.PermitInputs memory)
     {
+        return _permitInputs(nonce, 3 days);
+    }
+
+    function _permitInputs(uint256 nonce, uint64 unlockIn)
+        internal
+        view
+        returns (UnderwritingHookSystemExample.PermitInputs memory)
+    {
         return UnderwritingHookSystemExample.PermitInputs({
             merchantExecutionWallet: merchantExecutionWallet,
             decisionFeeUsdc: 5e6,
@@ -378,7 +434,7 @@ contract UnderwritingHookSystemExampleTest is Test {
             fundedPrincipalUsdc: 80e6,
             coverageCapUsdc: 100e6,
             executeFor: 2 days,
-            unlockIn: 3 days,
+            unlockIn: unlockIn,
             nonce: nonce
         });
     }
