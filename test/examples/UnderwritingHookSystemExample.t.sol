@@ -32,7 +32,7 @@ contract UnderwritingHookSystemExampleTest is Test {
         usdc = new MockERC20("Mock USDC", "mUSDC");
         collateralManager = new MockCollateralManager(usdc);
         acp = new AgenticCommerceHooked(address(usdc), treasury);
-        example = new UnderwritingHookSystemExample(acp, collateralManager);
+        example = new UnderwritingHookSystemExample(acp, collateralManager, 1 days);
 
         usdc.mint(client, 1_000_000e6);
         usdc.mint(provider, 1_000_000e6);

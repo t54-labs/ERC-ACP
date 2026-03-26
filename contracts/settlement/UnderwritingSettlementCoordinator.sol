@@ -16,7 +16,11 @@ contract UnderwritingSettlementCoordinator {
     error PermitMismatch();
     error OnlyClient();
     error OnlyProvider();
+    error OnlyEvaluator();
     error DisputeHashRequired();
+    error DisputeHashMismatch();
+    error SlashAttestationHashMismatch();
+    error TooEarly();
 
     IAgenticCommerceKernel public immutable acp;
     UnderwritingHook public immutable hook;
@@ -26,6 +30,8 @@ contract UnderwritingSettlementCoordinator {
     mapping(uint256 jobId => SettlementTypes.SuccessDispute) public successDisputeByJobId;
     mapping(uint256 settlementJobId => address escrow) internal escrowBySettlementJobId;
     mapping(uint256 jobId => uint64 unlockAt) public unlockAtByJobId;
+    uint64 public immutable disputeWindowSeconds;
+    mapping(uint256 jobId => uint64 releaseRequestedAt) public releaseRequestedAtByJobId;
 
     event FundingOrchestrated(uint256 indexed jobId, address indexed escrow, uint256 indexed settlementJobId);
     event CollateralReleaseRequested(uint256 indexed jobId, uint256 indexed settlementJobId, address indexed provider);
@@ -46,10 +52,16 @@ contract UnderwritingSettlementCoordinator {
     event ExpirySettled(uint256 indexed jobId, uint256 indexed settlementJobId, bool timeoutClaimed);
     event RejectedJobFinalized(uint256 indexed jobId, uint256 indexed settlementJobId);
 
-    constructor(IAgenticCommerceKernel acp_, UnderwritingHook hook_, ICollateralManager collateralManager_) {
+    constructor(
+        IAgenticCommerceKernel acp_,
+        UnderwritingHook hook_,
+        ICollateralManager collateralManager_,
+        uint64 disputeWindowSeconds_
+    ) {
         acp = acp_;
         hook = hook_;
         collateralManager = collateralManager_;
+        disputeWindowSeconds = disputeWindowSeconds_;
     }
 
     function settlementEscrow(uint256 jobId) public view returns (address) {
@@ -108,6 +120,7 @@ contract UnderwritingSettlementCoordinator {
             revert InvalidState();
         }
 
+        releaseRequestedAtByJobId[jobId] = uint64(block.timestamp);
         jobSettlementState[jobId] = SettlementTypes.SettlementState.SuccessPendingRelease;
         emit CollateralReleaseRequested(jobId, hook.jobSettlementJobId(jobId), job.provider);
     }
@@ -122,7 +135,7 @@ contract UnderwritingSettlementCoordinator {
         successDisputeByJobId[jobId] = SettlementTypes.SuccessDispute({
             disputeHash: disputeHash,
             openedAt: uint64(block.timestamp),
-            deadline: uint64(block.timestamp)
+            deadline: uint64(block.timestamp + disputeWindowSeconds)
         });
         jobSettlementState[jobId] = SettlementTypes.SettlementState.DisputeOpen;
 
@@ -134,14 +147,24 @@ contract UnderwritingSettlementCoordinator {
         ICollateralManager.SlashAttestation calldata attestation,
         bytes calldata slashSig
     ) external {
+        if (msg.sender != hook.evaluator()) revert OnlyEvaluator();
+
         IAgenticCommerceKernel.Job memory job = _getHookedJob(decision.jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
+        if (jobSettlementState[decision.jobId] != SettlementTypes.SettlementState.DisputeOpen) revert InvalidState();
+
+        SettlementTypes.SuccessDispute storage dispute = successDisputeByJobId[decision.jobId];
+        if (decision.disputeHash != dispute.disputeHash) revert DisputeHashMismatch();
 
         uint256 settlementJobId = hook.jobSettlementJobId(decision.jobId);
         if (decision.outcome == SettlementTypes.SuccessDisputeOutcome.ReleaseCollateral) {
             jobSettlementState[decision.jobId] = SettlementTypes.SettlementState.ReleaseApproved;
             emit SuccessDisputeReleased(decision.jobId, settlementJobId, decision.disputeHash, decision.reason);
             return;
+        }
+
+        if (decision.slashAttestationHash != keccak256(abi.encode(attestation))) {
+            revert SlashAttestationHashMismatch();
         }
 
         UnderwritingSettlementEscrow escrow = _escrow(decision.jobId);
@@ -163,6 +186,11 @@ contract UnderwritingSettlementCoordinator {
                 && currentState != SettlementTypes.SettlementState.ReleaseApproved
         ) {
             revert InvalidState();
+        }
+        if (currentState == SettlementTypes.SettlementState.SuccessPendingRelease) {
+            if (block.timestamp < uint256(releaseRequestedAtByJobId[jobId]) + uint256(disputeWindowSeconds)) {
+                revert TooEarly();
+            }
         }
         if (unlockAtByJobId[jobId] != 0 && block.timestamp < unlockAtByJobId[jobId]) revert InvalidState();
 

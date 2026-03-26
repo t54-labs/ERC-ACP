@@ -54,7 +54,7 @@ contract UnderwritingHookSystemExample {
         _;
     }
 
-    constructor(AgenticCommerceHooked acp_, ICollateralManager collateralManager_) {
+    constructor(AgenticCommerceHooked acp_, ICollateralManager collateralManager_, uint64 disputeWindowSeconds_) {
         if (address(acp_) == address(0) || address(collateralManager_) == address(0)) revert ZeroAddress();
 
         acp = acp_;
@@ -63,7 +63,7 @@ contract UnderwritingHookSystemExample {
 
         hook = new UnderwritingHook(address(acp_), address(this));
         coordinator = new UnderwritingSettlementCoordinator(
-            IAgenticCommerceKernel(address(acp_)), hook, collateralManager_
+            IAgenticCommerceKernel(address(acp_)), hook, collateralManager_, disputeWindowSeconds_
         );
         evaluator = new UnderwritingEvaluator(IAgenticCommerceKernel(address(acp_)), hook, address(coordinator));
 

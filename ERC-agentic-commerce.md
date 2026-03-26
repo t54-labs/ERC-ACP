@@ -307,13 +307,13 @@ Step 5 — job continues normally
 
 ---
 
-#### Example 3 — MCU Hook System
+#### Example 3 — Underwriting Hook System
 
-**Problem:** Some ACP extensions do not fit a single `BaseACPHook` contract. Merchant custody underwriting needs a policy hook, an evaluator for underwriter signatures, a coordinator for explicit settlement actions, per-job adapters, and a `BondManager` integration.
+**Problem:** Some ACP extensions do not fit a single `BaseACPHook` contract. Hook-driven underwriting needs a policy hook, an evaluator for underwriter signatures, a settlement coordinator for explicit economic actions, on-demand escrow adapters, and a collateral manager integration.
 
-**Solution:** Use a documented wiring helper such as `contracts/examples/MCUHookSystemExample.sol` to deploy and wire `MCUHookLite`, `MCUCoordinator`, and `UnderwriterEvaluator`, then use `setBudget(..., abi.encode(MCUCommit))` plus a matching `UnderwritePermit` for the protected funding flow.
+**Solution:** Use `contracts/examples/UnderwritingHookSystemExample.sol` to deploy and wire the canonical `UnderwritingHook`, `UnderwritingSettlementCoordinator`, and `UnderwritingEvaluator`, then use `setBudget(..., abi.encode(UnderwriteCommit))` plus a matching `UnderwritePermit` for the protected funding flow.
 
-See also: `contracts/mcu/README.md` for the full MCU profile and `contracts/mcu/mcu-hook-system-sequence.md` for the concrete sequence diagram.
+See also: `contracts/settlement/README.md` for the hook-versus-settlement boundary and the concrete funding/finalization flow.
 
 ---
 

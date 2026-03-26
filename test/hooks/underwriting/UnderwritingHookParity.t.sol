@@ -139,6 +139,47 @@ contract UnderwritingHookParityTest is Test {
         acp.setBudget(badCloseJobId, JOB_BUDGET / 2, abi.encode(_commit(rootJobId, false)));
     }
 
+    function testCloseJobRejectClearsActiveLinkageAndAllowsReplacement() public {
+        hook.registerUnderwriter(underwriter);
+
+        uint256 rootJobId = _createJob(provider, "root underwriting job");
+
+        vm.startPrank(client);
+        acp.setBudget(rootJobId, JOB_BUDGET, abi.encode(_commit(0, true)));
+        acp.fund(rootJobId, JOB_BUDGET, bytes(""));
+        vm.stopPrank();
+
+        coordinator.orchestrateFunding(rootJobId);
+
+        UnderwritingTypes.SubmitEvidence memory rootEvidence = _evidence("root bundle");
+        vm.prank(provider);
+        acp.submit(rootJobId, rootEvidence.bundleHash, abi.encode(rootEvidence));
+
+        vm.prank(address(evaluator));
+        acp.complete(rootJobId, keccak256("root approved"), bytes(""));
+
+        uint256 closeJobId = _createJob(provider, "close underwriting job");
+
+        vm.prank(client);
+        acp.setBudget(closeJobId, JOB_BUDGET / 2, abi.encode(_commit(rootJobId, false)));
+
+        assertEq(hook.getActiveCloseJobId(rootJobId), closeJobId);
+
+        vm.prank(client);
+        acp.reject(closeJobId, keccak256("close rejected"), bytes(""));
+
+        assertEq(uint256(hook.jobSidecarState(closeJobId)), uint256(UnderwritingTypes.SidecarState.RejectSettled));
+        assertEq(hook.getActiveCloseJobId(rootJobId), 0);
+
+        uint256 replacementCloseJobId = _createJob(provider, "replacement close underwriting job");
+
+        vm.prank(client);
+        acp.setBudget(replacementCloseJobId, JOB_BUDGET / 3, abi.encode(_commit(rootJobId, false)));
+
+        assertEq(hook.getActiveCloseJobId(rootJobId), replacementCloseJobId);
+        assertEq(hook.getParentJobId(replacementCloseJobId), rootJobId);
+    }
+
     function _createJob(address provider_, string memory description) internal returns (uint256 jobId) {
         vm.prank(client);
         jobId = acp.createJob(provider_, address(evaluator), block.timestamp + 1 days, description, address(hook));
