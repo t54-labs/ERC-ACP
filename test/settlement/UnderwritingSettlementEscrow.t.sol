@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "../../contracts/settlement/UnderwritingSettlementEscrow.sol";
-import "../../contracts/mcu/ICollateralManager.sol";
+import "../../contracts/interfaces/ICollateralManager.sol";
 import "../mocks/MockCollateralManager.sol";
 import "../mocks/MockERC20.sol";
 

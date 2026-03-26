@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import "../AgenticCommerceHooked.sol";
 import "../interfaces/IAgenticCommerceKernel.sol";
-import "../mcu/ICollateralManager.sol";
+import "../interfaces/ICollateralManager.sol";
 import "../hooks/underwriting/UnderwritingHook.sol";
 import "../hooks/underwriting/UnderwritingTypes.sol";
 import "../settlement/UnderwritingSettlementCoordinator.sol";

@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "../interfaces/IAgenticCommerceKernel.sol";
-import "../mcu/ICollateralManager.sol";
+import "../interfaces/ICollateralManager.sol";
 import "../hooks/underwriting/IUnderwritingHookView.sol";
 import "../hooks/underwriting/UnderwritingTypes.sol";
 import "./SettlementTypes.sol";

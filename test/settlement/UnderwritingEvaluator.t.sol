@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "../../contracts/interfaces/IAgenticCommerceKernel.sol";
-import "../../contracts/mcu/ICollateralManager.sol";
+import "../../contracts/interfaces/ICollateralManager.sol";
 import "../../contracts/hooks/underwriting/IUnderwritingHookView.sol";
 import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../contracts/settlement/SettlementTypes.sol";
