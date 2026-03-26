@@ -21,6 +21,7 @@ contract UnderwritingSettlementCoordinator {
     error DisputeHashMismatch();
     error SlashAttestationHashMismatch();
     error TooEarly();
+    error DisputeWindowExpired();
 
     IAgenticCommerceKernel public immutable acp;
     UnderwritingHook public immutable hook;
@@ -129,6 +130,9 @@ contract UnderwritingSettlementCoordinator {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
         if (jobSettlementState[jobId] != SettlementTypes.SettlementState.SuccessPendingRelease) revert InvalidState();
+        if (block.timestamp >= uint256(releaseRequestedAtByJobId[jobId]) + uint256(disputeWindowSeconds)) {
+            revert DisputeWindowExpired();
+        }
         if (msg.sender != job.client) revert OnlyClient();
         if (disputeHash == bytes32(0)) revert DisputeHashRequired();
 

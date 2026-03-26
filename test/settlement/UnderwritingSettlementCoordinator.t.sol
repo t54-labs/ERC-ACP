@@ -445,6 +445,25 @@ contract UnderwritingSettlementCoordinatorTest is Test {
         );
     }
 
+    function testOpenSuccessDisputeRevertsAfterDisputeWindowExpires() public {
+        hook.seedJob(
+            ROOT_JOB_ID,
+            UnderwritingTypes.SidecarState.SuccessPendingConfirmation,
+            _commit(0),
+            ROOT_JOB_ID
+        );
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Completed));
+
+        vm.prank(provider);
+        coordinator.requestCollateralRelease(ROOT_JOB_ID);
+
+        vm.warp(block.timestamp + DISPUTE_WINDOW);
+
+        vm.prank(client);
+        vm.expectRevert(UnderwritingSettlementCoordinator.DisputeWindowExpired.selector);
+        coordinator.openSuccessDispute(ROOT_JOB_ID, keccak256("late-dispute"));
+    }
+
     function testReleaseCollateralRevertsDuringDisputeWindow() public {
         hook.seedJob(
             ROOT_JOB_ID,
