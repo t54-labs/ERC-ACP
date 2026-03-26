@@ -68,15 +68,13 @@ contract UnderwritingHookParityTest is Test {
         usdc.approve(address(acp), type(uint256).max);
     }
 
-    function testSetWiringAcceptsCanonicalCoordinatorSurface() public {
+    function testSetWiringRejectsDeprecatedHookOnlyCoordinator() public {
         UnderwritingHook secondHook = new UnderwritingHook(address(acp), address(this));
         UnderwritingEvaluator secondEvaluator = new UnderwritingEvaluator(address(acp), address(secondHook));
-        UnderwritingCoordinator canonicalCoordinator = new UnderwritingCoordinator(address(acp), address(secondHook));
+        UnderwritingCoordinator deprecatedCoordinator = new UnderwritingCoordinator(address(acp), address(secondHook));
 
-        secondHook.setWiring(address(secondEvaluator), address(canonicalCoordinator));
-
-        assertEq(secondHook.evaluator(), address(secondEvaluator));
-        assertEq(secondHook.coordinator(), address(canonicalCoordinator));
+        vm.expectRevert(UnderwritingHook.InvalidWiring.selector);
+        secondHook.setWiring(address(secondEvaluator), address(deprecatedCoordinator));
     }
 
     function testRootAndCloseLifecycleMatchesCanonicalHookParity() public {
