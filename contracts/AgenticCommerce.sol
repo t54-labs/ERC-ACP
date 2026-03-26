@@ -16,6 +16,7 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
 
     bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
+    /// @notice Lifecycle states for ACP jobs.
     enum JobStatus {
         Open,
         Funded,
@@ -25,12 +26,14 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         Expired
     }
 
+    /// @notice Job variants used to model standalone, open, and close flows.
     enum JobKind {
         Standalone,
         Open,
         Close
     }
 
+    /// @notice Canonical ACP job record.
     struct Job {
         uint256 id;
         address client;
@@ -77,6 +80,9 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
     error CloseJobAlreadyExists();
     error SubmitNotAllowedForOpenJob();
 
+    /// @notice Deploys the ACP kernel for a payment token and treasury.
+    /// @param paymentToken_ The ERC20 token used for job funding and payout.
+    /// @param treasury_ The treasury that receives platform fees.
     constructor(address paymentToken_, address treasury_) {
         if (paymentToken_ == address(0) || treasury_ == address(0)) revert ZeroAddress();
         paymentToken = IERC20(paymentToken_);
@@ -85,6 +91,9 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         _grantRole(ADMIN_ROLE, msg.sender);
     }
 
+    /// @notice Updates the platform fee and fee treasury.
+    /// @param feeBP_ The fee in basis points.
+    /// @param treasury_ The treasury that should receive future fees.
     function setPlatformFee(uint256 feeBP_, address treasury_) external onlyRole(ADMIN_ROLE) {
         if (treasury_ == address(0)) revert ZeroAddress();
         if (feeBP_ > 10000) revert InvalidJob();
@@ -92,11 +101,23 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         platformTreasury = treasury_;
     }
 
+    /// @notice Creates a standalone ACP job.
+    /// @param provider The provider assigned to the job, or zero to assign later.
+    /// @param evaluator The evaluator allowed to complete or reject the job.
+    /// @param expiredAt The timestamp after which refunds may be claimed.
+    /// @param description The human-readable job description.
+    /// @return jobId The newly created job id.
     function createJob(address provider, address evaluator, uint256 expiredAt, string calldata description) external returns (uint256 jobId) {
         jobId = _createJob(msg.sender, provider, evaluator, expiredAt, description);
         jobKindByJobId[jobId] = JobKind.Standalone;
     }
 
+    /// @notice Creates an open parent job that may later spawn a close job.
+    /// @param provider The provider assigned to the job, or zero to assign later.
+    /// @param evaluator The evaluator allowed to complete or reject the job.
+    /// @param expiredAt The timestamp after which refunds may be claimed.
+    /// @param description The human-readable job description.
+    /// @return jobId The newly created job id.
     function createOpenJob(address provider, address evaluator, uint256 expiredAt, string calldata description)
         external
         returns (uint256 jobId)
@@ -105,6 +126,11 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         jobKindByJobId[jobId] = JobKind.Open;
     }
 
+    /// @notice Creates a close job linked to a completed open parent job.
+    /// @param parentJobId The completed open parent job.
+    /// @param expiredAt The timestamp after which refunds may be claimed.
+    /// @param description The human-readable close-job description.
+    /// @return jobId The newly created close job id.
     function createCloseJob(uint256 parentJobId, uint256 expiredAt, string calldata description)
         external
         returns (uint256 jobId)
@@ -129,6 +155,7 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         emit LinkedJobCreated(parentJobId, jobId);
     }
 
+    /// @dev Creates and stores a new ACP job with common validation.
     function _createJob(
         address client_,
         address provider,
@@ -153,6 +180,8 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
     }
 
     /// @dev Client sets provider when job was created with provider == address(0). Must be set before fund.
+    /// @param jobId The job to update.
+    /// @param provider_ The provider address to assign.
     function setProvider(uint256 jobId, address provider_) external {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
@@ -164,6 +193,9 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         emit ProviderSet(jobId, provider_);
     }
 
+    /// @notice Sets or updates the budget for an open job.
+    /// @param jobId The job to update.
+    /// @param amount The desired budget amount.
     function setBudget(uint256 jobId, uint256 amount) external {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
@@ -173,6 +205,9 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         emit BudgetSet(jobId, amount);
     }
 
+    /// @notice Escrows the budget for a configured job.
+    /// @param jobId The job to fund.
+    /// @param expectedBudget The caller's expected budget guard.
     function fund(uint256 jobId, uint256 expectedBudget) external nonReentrant {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
@@ -187,6 +222,8 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
     }
 
     /// @dev Provider submits work, moving the job from Funded to Submitted for evaluator review.
+    /// @param jobId The funded job being submitted.
+    /// @param deliverable The deliverable hash or identifier.
     function submit(uint256 jobId, bytes32 deliverable) external {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
@@ -197,6 +234,9 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         emit JobSubmitted(jobId, msg.sender, deliverable);
     }
 
+    /// @notice Completes a funded or submitted job and releases escrowed payment.
+    /// @param jobId The job to complete.
+    /// @param reason The evaluator's completion reason code.
     function complete(uint256 jobId, bytes32 reason) external nonReentrant {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
@@ -221,6 +261,8 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
     }
 
     /// @dev Client may reject only when Open; evaluator may reject when Funded or Submitted (refunds client).
+    /// @param jobId The job to reject.
+    /// @param reason The rejection reason code.
     function reject(uint256 jobId, bytes32 reason) external nonReentrant {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
@@ -240,6 +282,8 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         emit JobRejected(jobId, msg.sender, reason);
     }
 
+    /// @notice Refunds an expired funded or submitted job back to the client.
+    /// @param jobId The job whose refund is being claimed.
     function claimRefund(uint256 jobId) external nonReentrant {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
@@ -253,20 +297,32 @@ contract AgenticCommerce is AccessControl, ReentrancyGuard {
         emit JobExpired(jobId);
     }
 
+    /// @notice Returns the stored job record for `jobId`.
+    /// @param jobId The job identifier to fetch.
+    /// @return The ACP job struct.
     function getJob(uint256 jobId) external view returns (Job memory) {
         return jobs[jobId];
     }
 
+    /// @notice Returns the recorded job kind for `jobId`.
+    /// @param jobId The job identifier to inspect.
+    /// @return The job kind.
     function getJobKind(uint256 jobId) external view returns (JobKind) {
         if (jobs[jobId].id == 0) revert InvalidJob();
         return jobKindByJobId[jobId];
     }
 
+    /// @notice Returns the parent job id associated with a close job.
+    /// @param jobId The close job identifier to inspect.
+    /// @return The linked parent job id, or zero when unset.
     function getParentJobId(uint256 jobId) external view returns (uint256) {
         if (jobs[jobId].id == 0) revert InvalidJob();
         return parentJobIdByCloseJobId[jobId];
     }
 
+    /// @notice Returns the active close job id associated with a parent job.
+    /// @param jobId The parent job identifier to inspect.
+    /// @return The linked close job id, or zero when unset.
     function getCloseJobId(uint256 jobId) external view returns (uint256) {
         if (jobs[jobId].id == 0) revert InvalidJob();
         return closeJobIdByParentJobId[jobId];

@@ -75,6 +75,9 @@ contract FundTransferHook is BaseACPHook {
     error NothingToRecover();
     error JobNotExpired();
 
+    /// @notice Deploys the fund-transfer hook for a specific token and ACP contract.
+    /// @param token_ The ERC20 token transferred as capital and output.
+    /// @param acpContract_ The hooked ACP contract address.
     constructor(address token_, address acpContract_) BaseACPHook(acpContract_) {
         if (token_ == address(0)) revert ZeroAddress();
         token = IERC20(token_);
@@ -150,6 +153,7 @@ contract FundTransferHook is BaseACPHook {
 
     /// @dev Provider can recover deposited tokens after the job expires.
     ///      claimRefund is deliberately not hookable, so this is a direct call.
+    /// @param jobId The expired job whose escrowed output tokens should be recovered.
     function recoverTokens(uint256 jobId) external {
         TransferCommitment memory c = commitments[jobId];
         if (!c.providerDeposited) revert NothingToRecover();
@@ -164,6 +168,11 @@ contract FundTransferHook is BaseACPHook {
     // View
     // -------------------------------------------------------------------------
 
+    /// @notice Returns the stored transfer commitment for `jobId`.
+    /// @param jobId The job identifier to inspect.
+    /// @return buyer The recipient of the escrowed output tokens.
+    /// @return transferAmount The committed capital/output token amount.
+    /// @return providerDeposited Whether the provider has deposited the output tokens.
     function getCommitment(uint256 jobId) external view returns (address buyer, uint256 transferAmount, bool providerDeposited) {
         TransferCommitment memory c = commitments[jobId];
         return (c.buyer, c.transferAmount, c.providerDeposited);
@@ -173,6 +182,7 @@ contract FundTransferHook is BaseACPHook {
     // Internal helpers
     // -------------------------------------------------------------------------
 
+    /// @dev Reads the provider and status fields for `jobId` directly from ACP.
     function _getJobProviderAndStatus(uint256 jobId) internal view returns (address provider, uint8 status) {
         (bool ok, bytes memory data) = acpContract.staticcall(
             abi.encodeWithSignature("getJob(uint256)", jobId)

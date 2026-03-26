@@ -1,13 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "../mcu/IAgenticCommerceKernel.sol";
+import "../interfaces/IAgenticCommerceKernel.sol";
 import "../mcu/ICollateralManager.sol";
 import "../hooks/underwriting/UnderwritingHook.sol";
 import "../hooks/underwriting/UnderwritingTypes.sol";
 import "./SettlementTypes.sol";
 import "./UnderwritingSettlementEscrow.sol";
 
+/**
+ * @title UnderwritingSettlementCoordinator
+ * @notice Coordinates collateral, principal, expiry, and dispute settlement for protected underwriting jobs.
+ * @dev The underwriting hook remains the workflow authority, while this contract
+ *      owns settlement-specific state and deploys per-settlement escrows on demand.
+ */
 contract UnderwritingSettlementCoordinator {
     error WrongJobStatus();
     error WrongHook();
@@ -53,6 +59,11 @@ contract UnderwritingSettlementCoordinator {
     event ExpirySettled(uint256 indexed jobId, uint256 indexed settlementJobId, bool timeoutClaimed);
     event RejectedJobFinalized(uint256 indexed jobId, uint256 indexed settlementJobId);
 
+    /// @notice Deploys the settlement coordinator for a specific ACP kernel, hook, and collateral manager.
+    /// @param acp_ The ACP kernel used for job state reads.
+    /// @param hook_ The underwriting hook that owns workflow legitimacy.
+    /// @param collateralManager_ The collateral manager adapter used by settlement escrows.
+    /// @param disputeWindowSeconds_ The duration of the client dispute window after release is requested.
     constructor(
         IAgenticCommerceKernel acp_,
         UnderwritingHook hook_,
@@ -65,10 +76,17 @@ contract UnderwritingSettlementCoordinator {
         disputeWindowSeconds = disputeWindowSeconds_;
     }
 
+    /// @notice Returns the settlement escrow address associated with `jobId`.
+    /// @param jobId The ACP job identifier to inspect.
+    /// @return The deployed settlement escrow address, or zero when none exists.
     function settlementEscrow(uint256 jobId) public view returns (address) {
         return escrowBySettlementJobId[hook.jobSettlementJobId(jobId)];
     }
 
+    /// @notice Orchestrates collateral locking and optional principal release for a funded job.
+    /// @param jobId The funded ACP job to protect.
+    /// @param permit The underwriting permit that must match the stored commit.
+    /// @param permitSig The signature authorizing `permit`.
     function orchestrateFunding(
         uint256 jobId,
         ICollateralManager.UnderwritePermit calldata permit,
@@ -102,6 +120,8 @@ contract UnderwritingSettlementCoordinator {
         emit FundingOrchestrated(jobId, address(escrow), settlementJobId);
     }
 
+    /// @notice Starts the provider collateral release flow after job completion.
+    /// @param jobId The completed ACP job whose collateral should be released.
     function requestCollateralRelease(uint256 jobId) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
@@ -126,6 +146,9 @@ contract UnderwritingSettlementCoordinator {
         emit CollateralReleaseRequested(jobId, hook.jobSettlementJobId(jobId), job.provider);
     }
 
+    /// @notice Opens a client dispute during the post-success release window.
+    /// @param jobId The completed ACP job being disputed.
+    /// @param disputeHash The opaque hash representing the client's dispute payload.
     function openSuccessDispute(uint256 jobId, bytes32 disputeHash) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
@@ -146,6 +169,10 @@ contract UnderwritingSettlementCoordinator {
         emit SuccessDisputeOpened(jobId, hook.jobSettlementJobId(jobId), job.client, disputeHash);
     }
 
+    /// @notice Applies an underwriter-signed success dispute decision.
+    /// @param decision The dispute decision to execute.
+    /// @param attestation The slash attestation to forward when slashing collateral.
+    /// @param slashSig The signature authorizing `attestation`.
     function applySuccessDisputeDecision(
         SettlementTypes.SuccessDisputeDecision calldata decision,
         ICollateralManager.SlashAttestation calldata attestation,
@@ -180,6 +207,8 @@ contract UnderwritingSettlementCoordinator {
         );
     }
 
+    /// @notice Finalizes collateral release once the dispute window has closed or been resolved.
+    /// @param jobId The completed ACP job whose collateral should be released.
     function releaseCollateral(uint256 jobId) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
@@ -205,6 +234,8 @@ contract UnderwritingSettlementCoordinator {
         emit CollateralReleased(jobId, hook.jobSettlementJobId(jobId));
     }
 
+    /// @notice Settles an expired underwriting job through the correct timeout path.
+    /// @param jobId The expired ACP job to settle.
     function settleExpiry(uint256 jobId) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Expired) revert WrongJobStatus();
@@ -230,6 +261,8 @@ contract UnderwritingSettlementCoordinator {
         emit ExpirySettled(jobId, hook.jobSettlementJobId(jobId), true);
     }
 
+    /// @notice Finalizes rejected jobs and sweeps any residual escrow balance.
+    /// @param jobId The rejected ACP job to finalize.
     function finalizeRejectedJob(uint256 jobId) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Rejected) revert WrongJobStatus();
@@ -244,17 +277,20 @@ contract UnderwritingSettlementCoordinator {
         emit RejectedJobFinalized(jobId, hook.jobSettlementJobId(jobId));
     }
 
+    /// @dev Loads a job from ACP and ensures it is wired to this underwriting hook.
     function _getHookedJob(uint256 jobId) internal view returns (IAgenticCommerceKernel.Job memory job) {
         job = acp.getJob(jobId);
         if (job.hook != address(hook)) revert WrongHook();
     }
 
+    /// @dev Returns the configured settlement escrow for `jobId`.
     function _escrow(uint256 jobId) internal view returns (UnderwritingSettlementEscrow) {
         address escrowAddress = settlementEscrow(jobId);
         if (escrowAddress == address(0)) revert MissingEscrow();
         return UnderwritingSettlementEscrow(escrowAddress);
     }
 
+    /// @dev Returns an existing escrow or deploys and configures a new one for the settlement flow.
     function _getOrCreateEscrow(
         uint256 jobId,
         uint256 settlementJobId,
@@ -273,6 +309,7 @@ contract UnderwritingSettlementCoordinator {
         jobSettlementState[jobId] = SettlementTypes.SettlementState.EscrowConfigured;
     }
 
+    /// @dev Verifies that a permit matches the recorded job, commit, and escrow configuration.
     function _assertPermitMatches(
         uint256 jobId,
         uint256 settlementJobId,

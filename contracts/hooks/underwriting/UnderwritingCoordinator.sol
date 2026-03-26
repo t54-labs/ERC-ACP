@@ -5,6 +5,12 @@ import "../../AgenticCommerceHooked.sol";
 import "./UnderwritingHook.sol";
 import "./UnderwritingTypes.sol";
 
+/**
+ * @title UnderwritingCoordinator
+ * @notice Minimal coordinator that advances funded underwriting jobs into the protected state.
+ * @dev This lightweight coordinator predates the full settlement migration and only
+ *      marks jobs as protected once ACP funding has succeeded.
+ */
 contract UnderwritingCoordinator {
     error ZeroAddress();
     error WrongHook();
@@ -16,12 +22,17 @@ contract UnderwritingCoordinator {
 
     event FundingOrchestrated(uint256 indexed jobId, uint256 indexed settlementJobId);
 
+    /// @notice Deploys the coordinator for a specific ACP kernel and underwriting hook.
+    /// @param acpContract_ The hooked ACP contract address.
+    /// @param hook_ The underwriting hook address.
     constructor(address acpContract_, address hook_) {
         if (acpContract_ == address(0) || hook_ == address(0)) revert ZeroAddress();
         acp = AgenticCommerceHooked(acpContract_);
         hook = UnderwritingHook(hook_);
     }
 
+    /// @notice Marks a funded underwriting job as protected.
+    /// @param jobId The funded ACP job to transition.
     function orchestrateFunding(uint256 jobId) external {
         AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
         if (job.hook != address(hook)) revert WrongHook();

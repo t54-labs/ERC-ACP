@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../contracts/mcu/IAgenticCommerceKernel.sol";
+import "../../contracts/interfaces/IAgenticCommerceKernel.sol";
 import "../../contracts/mcu/ICollateralManager.sol";
 import "../../contracts/hooks/underwriting/UnderwritingHook.sol";
 import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
@@ -235,6 +235,10 @@ contract UnderwritingSettlementCoordinatorTest is Test {
         coordinator.orchestrateFunding(CLOSE_JOB_ID, _permit(CLOSE_JOB_ID, ROOT_JOB_ID, predictedEscrow), bytes("permit-sig"));
 
         assertEq(coordinator.settlementEscrow(CLOSE_JOB_ID), predictedEscrow);
+        assertEq(
+            uint256(coordinator.jobSettlementState(CLOSE_JOB_ID)),
+            uint256(SettlementTypes.SettlementState.None)
+        );
         assertEq(usdc.balanceOf(provider), providerBalanceBefore);
         assertEq(usdc.balanceOf(client), clientBalanceBefore);
         assertEq(usdc.balanceOf(address(collateralManager)), collateralManagerBalanceBefore);

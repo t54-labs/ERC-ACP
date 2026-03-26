@@ -7,6 +7,12 @@ import "../../AgenticCommerceHooked.sol";
 import "./IUnderwritingHookView.sol";
 import "./UnderwritingTypes.sol";
 
+/**
+ * @title UnderwritingEvaluator
+ * @notice Executes complete and reject decisions signed by the responsible underwriter.
+ * @dev The contract validates the ACP job state, enforces EIP-712 signatures, and
+ *      consumes one nonce per underwriter decision.
+ */
 contract UnderwritingEvaluator is EIP712 {
     error ZeroAddress();
     error WrongDecisionStatus();
@@ -25,12 +31,18 @@ contract UnderwritingEvaluator is EIP712 {
 
     mapping(address underwriter => mapping(uint256 nonce => bool used)) public usedNonces;
 
+    /// @notice Deploys the evaluator for a specific ACP kernel and underwriting hook.
+    /// @param acpContract_ The hooked ACP contract address.
+    /// @param hook_ The underwriting hook view address.
     constructor(address acpContract_, address hook_) EIP712("Underwriting Evaluator", "1") {
         if (acpContract_ == address(0) || hook_ == address(0)) revert ZeroAddress();
         acp = AgenticCommerceHooked(acpContract_);
         hook = IUnderwritingHookView(hook_);
     }
 
+    /// @notice Completes a submitted job using an underwriter-signed decision.
+    /// @param decision The EIP-712 completion decision payload.
+    /// @param signature The underwriter signature authorizing the completion.
     function completeBySig(UnderwritingTypes.CompleteDecision calldata decision, bytes calldata signature) external {
         if (block.timestamp > decision.deadline) revert DecisionExpired(decision.deadline, uint64(block.timestamp));
 
@@ -52,6 +64,9 @@ contract UnderwritingEvaluator is EIP712 {
         acp.complete(decision.jobId, decision.reason, "");
     }
 
+    /// @notice Rejects a submitted job using an underwriter-signed decision.
+    /// @param decision The EIP-712 rejection decision payload.
+    /// @param signature The underwriter signature authorizing the rejection.
     function rejectBySig(UnderwritingTypes.RejectDecision calldata decision, bytes calldata signature) external {
         if (block.timestamp > decision.deadline) revert DecisionExpired(decision.deadline, uint64(block.timestamp));
 
@@ -73,6 +88,7 @@ contract UnderwritingEvaluator is EIP712 {
         acp.reject(decision.jobId, decision.reason, "");
     }
 
+    /// @dev Reverts on reused nonces or invalid signatures before consuming the nonce.
     function _consumeNonceAndVerifySigner(
         address expectedUnderwriter,
         uint256 nonce,

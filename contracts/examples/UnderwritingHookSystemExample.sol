@@ -2,17 +2,24 @@
 pragma solidity ^0.8.20;
 
 import "../AgenticCommerceHooked.sol";
-import "../mcu/IAgenticCommerceKernel.sol";
+import "../interfaces/IAgenticCommerceKernel.sol";
 import "../mcu/ICollateralManager.sol";
 import "../hooks/underwriting/UnderwritingHook.sol";
 import "../hooks/underwriting/UnderwritingTypes.sol";
 import "../settlement/UnderwritingSettlementCoordinator.sol";
 import "../settlement/UnderwritingEvaluator.sol";
 
+/**
+ * @title UnderwritingHookSystemExample
+ * @notice Example deployment helper that wires the underwriting hook, coordinator, and evaluator together.
+ * @dev This contract is intended as reference glue for tests and integrations that
+ *      want a ready-made underwriting stack on top of `AgenticCommerceHooked`.
+ */
 contract UnderwritingHookSystemExample {
     error ZeroAddress();
     error OnlyOwner();
 
+    /// @notice Inputs used to assemble an underwriting commit.
     struct CommitInputs {
         uint256 parentJobId;
         address underwriter;
@@ -23,6 +30,7 @@ contract UnderwritingHookSystemExample {
         bool allowCloseJob;
     }
 
+    /// @notice Inputs used to assemble an underwriting permit.
     struct PermitInputs {
         address merchantExecutionWallet;
         uint256 decisionFeeUsdc;
@@ -54,6 +62,10 @@ contract UnderwritingHookSystemExample {
         _;
     }
 
+    /// @notice Deploys and wires a full underwriting hook stack for the supplied ACP kernel.
+    /// @param acp_ The hooked ACP contract to integrate with.
+    /// @param collateralManager_ The collateral manager used by settlement escrows.
+    /// @param disputeWindowSeconds_ The duration of the post-success dispute window.
     constructor(AgenticCommerceHooked acp_, ICollateralManager collateralManager_, uint64 disputeWindowSeconds_) {
         if (address(acp_) == address(0) || address(collateralManager_) == address(0)) revert ZeroAddress();
 
@@ -72,14 +84,21 @@ contract UnderwritingHookSystemExample {
         emit HookSystemDeployed(address(acp_), address(collateralManager_), address(hook), address(coordinator), address(evaluator));
     }
 
+    /// @notice Registers an underwriter through the example-owned hook.
+    /// @param underwriter The underwriter address to register.
     function registerUnderwriter(address underwriter) external onlyOwner {
         hook.registerUnderwriter(underwriter);
     }
 
+    /// @notice Unregisters an underwriter through the example-owned hook.
+    /// @param underwriter The underwriter address to unregister.
     function unregisterUnderwriter(address underwriter) external onlyOwner {
         hook.unregisterUnderwriter(underwriter);
     }
 
+    /// @notice Builds an underwriting commit using relative validity inputs.
+    /// @param inputs The user-friendly commit inputs.
+    /// @return commit The assembled underwriting commit.
     function buildCommit(CommitInputs memory inputs) external view returns (UnderwritingTypes.UnderwriteCommit memory commit) {
         commit = UnderwritingTypes.UnderwriteCommit({
             parentJobId: inputs.parentJobId,
@@ -92,14 +111,27 @@ contract UnderwritingHookSystemExample {
         });
     }
 
+    /// @notice ABI-encodes an underwriting commit for `setBudget` hook parameters.
+    /// @param commit The underwriting commit to encode.
+    /// @return The ABI-encoded commit payload.
     function encodeCommit(UnderwritingTypes.UnderwriteCommit memory commit) external pure returns (bytes memory) {
         return abi.encode(commit);
     }
 
+    /// @notice ABI-encodes submit evidence for ACP `submit` hook parameters.
+    /// @param evidence The submit evidence payload to encode.
+    /// @return The ABI-encoded evidence payload.
     function encodeSubmitEvidence(UnderwritingTypes.SubmitEvidence memory evidence) external pure returns (bytes memory) {
         return abi.encode(evidence);
     }
 
+    /// @notice Builds an underwriting permit using relative timing inputs.
+    /// @param jobId The ACP job being protected.
+    /// @param client The client funding the job.
+    /// @param escrow The settlement escrow that will act as safe and merchant.
+    /// @param commit The previously chosen underwriting commit.
+    /// @param inputs The user-friendly permit inputs.
+    /// @return permit The assembled collateral-manager permit.
     function buildPermit(
         uint256 jobId,
         address client,

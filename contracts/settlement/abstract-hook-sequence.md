@@ -4,6 +4,10 @@ This document captures the generic ERC-ACP request, negotiation, transaction,
 and completion flow with an abstract hook. It intentionally does not assume any
 specific hook implementation.
 
+> Note: This is a generic ACP reference. The finalized underwriting flow in
+> `hooks/underwriting/` requires `Submitted + EvidenceSubmitted` before
+> evaluator-driven completion or rejection.
+
 ## Open Leg
 
 ```mermaid
@@ -26,7 +30,7 @@ sequenceDiagram
     ACP->>Hook: afterAction(openJobId, fund, data)
 
     Note over Hook,Provider: Hook may deploy client principal and lock provider collateral
-    Note over ACP,Hook: For open jobs, evaluator may complete directly from Funded
+    Note over ACP,Hook: Some hook implementations may complete directly from Funded
     ACP->>Hook: beforeAction(openJobId, complete, data)
     ACP->>Hook: afterAction(openJobId, complete, data)
     ACP-->>Client: Open leg completed and waiting for future close

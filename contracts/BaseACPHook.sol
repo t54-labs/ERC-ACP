@@ -38,6 +38,8 @@ abstract contract BaseACPHook is IACPHook {
         _;
     }
 
+    /// @notice Stores the ACP contract allowed to call the hook callbacks.
+    /// @param acpContract_ The hooked ACP contract address.
     constructor(address acpContract_) {
         acpContract = acpContract_;
     }
@@ -53,6 +55,7 @@ abstract contract BaseACPHook is IACPHook {
 
     // --- IACPHook implementation (router) ------------------------------------
 
+    /// @inheritdoc IACPHook
     function beforeAction(uint256 jobId, bytes4 selector, bytes calldata data) external override onlyACP {
         if (selector == SEL_SET_PROVIDER) {
             (address provider_, bytes memory optParams) = abi.decode(data, (address, bytes));
@@ -74,6 +77,7 @@ abstract contract BaseACPHook is IACPHook {
         }
     }
 
+    /// @inheritdoc IACPHook
     function afterAction(uint256 jobId, bytes4 selector, bytes calldata data) external override onlyACP {
         if (selector == SEL_SET_PROVIDER) {
             (address provider_, bytes memory optParams) = abi.decode(data, (address, bytes));
@@ -117,6 +121,7 @@ abstract contract BaseACPHook is IACPHook {
 
     // --- Helper: read job from ACP contract ----------------------------------
 
+    /// @dev Reads the ACP job client directly from the hooked ACP contract.
     function _getJobClient(uint256 jobId) internal view returns (address client) {
         (bool ok, bytes memory data) = acpContract.staticcall(
             abi.encodeWithSignature("getJob(uint256)", jobId)

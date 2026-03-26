@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../contracts/mcu/IAgenticCommerceKernel.sol";
+import "../../contracts/interfaces/IAgenticCommerceKernel.sol";
 import "../../contracts/mcu/ICollateralManager.sol";
 import "../../contracts/hooks/underwriting/IUnderwritingHookView.sol";
 import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
@@ -209,6 +209,24 @@ contract UnderwritingEvaluatorTest is Test {
         assertEq(acp.lastRejectedJobId(), 12);
     }
 
+    function testCompleteBySigRejectsSubmittedWithoutEvidenceSubmittedState() public {
+        _seedJobWithState(13, IAgenticCommerceKernel.JobStatus.Submitted, rootUnderwriter, UnderwritingTypes.SidecarState.Protected);
+
+        UnderwritingTypes.CompleteDecision memory decision = _completeDecision(13);
+
+        vm.expectRevert(UnderwritingEvaluator.WrongDecisionState.selector);
+        evaluator.completeBySig(decision, _signCompleteDecision(decision, rootUnderwriterPk));
+    }
+
+    function testRejectBySigRejectsSubmittedWithoutEvidenceSubmittedState() public {
+        _seedJobWithState(14, IAgenticCommerceKernel.JobStatus.Submitted, rootUnderwriter, UnderwritingTypes.SidecarState.Protected);
+
+        UnderwritingTypes.RejectDecision memory decision = _rejectDecision(14);
+
+        vm.expectRevert(UnderwritingEvaluator.WrongDecisionState.selector);
+        evaluator.rejectBySig(decision, _signRejectDecision(decision, rootUnderwriterPk));
+    }
+
     function testResolveSuccessDisputeBySigRejectsBeforeCompleted() public {
         _seedJob(21, IAgenticCommerceKernel.JobStatus.Submitted, rootUnderwriter);
 
@@ -234,6 +252,15 @@ contract UnderwritingEvaluatorTest is Test {
     }
 
     function _seedJob(uint256 jobId, IAgenticCommerceKernel.JobStatus status_, address underwriter) internal {
+        _seedJobWithState(jobId, status_, underwriter, UnderwritingTypes.SidecarState.EvidenceSubmitted);
+    }
+
+    function _seedJobWithState(
+        uint256 jobId,
+        IAgenticCommerceKernel.JobStatus status_,
+        address underwriter,
+        UnderwritingTypes.SidecarState sidecarState
+    ) internal {
         acp.setJob(
             IAgenticCommerceKernel.Job({
                 id: jobId,
@@ -247,7 +274,7 @@ contract UnderwritingEvaluatorTest is Test {
                 status: status_
             })
         );
-        hook.seed(jobId, UnderwritingTypes.SidecarState.EvidenceSubmitted, underwriter, jobId);
+        hook.seed(jobId, sidecarState, underwriter, jobId);
     }
 
     function _completeDecision(uint256 jobId) internal view returns (UnderwritingTypes.CompleteDecision memory) {

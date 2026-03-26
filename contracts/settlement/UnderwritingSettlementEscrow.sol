@@ -6,6 +6,12 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "../mcu/ICollateralManager.sol";
 
+/**
+ * @title UnderwritingSettlementEscrow
+ * @notice Per-settlement escrow that moves principal and collateral on behalf of the coordinator.
+ * @dev The coordinator configures each escrow once, then uses it as the only caller
+ *      allowed to pull funds, invoke collateral-manager actions, and sweep residual balances.
+ */
 contract UnderwritingSettlementEscrow is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -56,6 +62,10 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         _;
     }
 
+    /// @notice Deploys an escrow bound to a controller and collateral manager.
+    /// @param usdc_ The settlement token used for principal and collateral transfers.
+    /// @param collateralManager_ The collateral manager adapter this escrow forwards to.
+    /// @param controller_ The authorized settlement coordinator.
     constructor(address usdc_, ICollateralManager collateralManager_, address controller_) {
         if (usdc_ == address(0) || address(collateralManager_) == address(0) || controller_ == address(0)) {
             revert InvalidConfig();
@@ -68,6 +78,12 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         usdc.forceApprove(address(collateralManager_), type(uint256).max);
     }
 
+    /// @notice Configures the escrow for a specific settlement flow.
+    /// @param jobId_ The ACP job id using this escrow.
+    /// @param client_ The client funding the job.
+    /// @param provider_ The provider posting collateral.
+    /// @param settlementJobId_ The canonical settlement id for this flow.
+    /// @param merchantExecutionWallet_ The merchant execution wallet recorded in the permit.
     function configure(
         uint256 jobId_,
         address client_,
@@ -93,6 +109,8 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit EscrowConfigured(jobId_, client_, provider_, settlementJobId_, merchantExecutionWallet_);
     }
 
+    /// @notice Pulls provider collateral into the escrow.
+    /// @param amount The collateral amount to transfer from the provider.
     function pullCollateralFromProvider(uint256 amount) external onlyController nonReentrant {
         _requireConfigured();
         if (amount > 0) {
@@ -101,6 +119,8 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit CollateralPullRequested(jobId, provider, amount);
     }
 
+    /// @notice Pulls client principal into the escrow.
+    /// @param amount The principal amount to transfer from the client.
     function pullPrincipalFromClient(uint256 amount) external onlyController nonReentrant {
         _requireConfigured();
         if (amount > 0) {
@@ -109,6 +129,9 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit PrincipalPullRequested(jobId, client, amount);
     }
 
+    /// @notice Locks provider collateral through the collateral manager.
+    /// @param permit The permit payload describing the protected settlement.
+    /// @param permitSig The signature authorizing `permit`.
     function lockCollateral(ICollateralManager.UnderwritePermit calldata permit, bytes calldata permitSig)
         external
         onlyController
@@ -121,6 +144,9 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit CollateralLockRequested(jobId, settlementJobId);
     }
 
+    /// @notice Releases funded principal to the merchant execution wallet.
+    /// @param permit The permit payload describing the protected settlement.
+    /// @param permitSig The signature authorizing `permit`.
     function releasePrincipalToMerchant(ICollateralManager.UnderwritePermit calldata permit, bytes calldata permitSig)
         external
         onlyController
@@ -133,6 +159,9 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit PrincipalReleaseRequested(jobId, settlementJobId, permit.fundedPrincipalUsdc);
     }
 
+    /// @notice Forwards a signed delivery confirmation to the collateral manager.
+    /// @param deliveryNonce The delivery nonce being confirmed.
+    /// @param sig The signature authorizing the delivery confirmation.
     function confirmDeliveryBySig(uint256 deliveryNonce, bytes calldata sig) external onlyController nonReentrant {
         _requireConfigured();
 
@@ -140,6 +169,7 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit DeliveryConfirmationRequested(jobId, settlementJobId, deliveryNonce);
     }
 
+    /// @notice Releases locked collateral and forwards the released balance to the provider.
     function releaseCollateralAndForward() external onlyController nonReentrant {
         _requireConfigured();
 
@@ -155,6 +185,9 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit CollateralReleaseRequested(jobId, settlementJobId);
     }
 
+    /// @notice Slashes collateral through the collateral manager.
+    /// @param attestation The slash attestation to execute.
+    /// @param slashSig The signature authorizing the slash.
     function slashCollateral(ICollateralManager.SlashAttestation calldata attestation, bytes calldata slashSig)
         external
         onlyController
@@ -169,6 +202,7 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit CollateralSlashRequested(jobId, settlementJobId, attestation.slashAmountUsdc, attestation.reasonCode);
     }
 
+    /// @notice Claims the timeout path for this settlement through the collateral manager.
     function claimTimeout() external onlyController nonReentrant {
         _requireConfigured();
 
@@ -176,6 +210,8 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit TimeoutClaimRequested(jobId, settlementJobId);
     }
 
+    /// @notice Sweeps any residual token balance back to the provider.
+    /// @dev Callable by the coordinator or provider to clean up terminal settlements.
     function sweepResidualToProvider() external onlyControllerOrProvider nonReentrant {
         _requireConfigured();
 
@@ -187,10 +223,12 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         emit ResidualSweepRequested(jobId, provider);
     }
 
+    /// @dev Ensures the escrow has been configured before use.
     function _requireConfigured() internal view {
         if (!configured) revert NotConfigured();
     }
 
+    /// @dev Verifies that an underwriting permit matches this escrow's immutable configuration.
     function _assertPermitMatches(ICollateralManager.UnderwritePermit calldata permit) internal view {
         if (
             permit.jobId != jobId || permit.settlementJobId != settlementJobId || permit.safe != address(this)

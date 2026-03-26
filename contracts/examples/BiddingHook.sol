@@ -66,6 +66,8 @@ contract BiddingHook is BaseACPHook {
     error NoBidDeadline();
     error BudgetMismatch();
 
+    /// @notice Deploys the bidding hook for a specific ACP contract.
+    /// @param acpContract_ The hooked ACP contract address.
     constructor(address acpContract_) BaseACPHook(acpContract_) {}
 
     // --- Hook callbacks only (no direct external functions) ---
@@ -115,12 +117,14 @@ contract BiddingHook is BaseACPHook {
         if (budget != b.committedAmount) revert BudgetMismatch();
     }
 
+    /// @dev Marks the bidding process as finalized once the provider has been set.
     function _postSetProvider(uint256 jobId, address, bytes memory) internal override {
         biddings[jobId].finalized = true;
     }
 
     // --- Helper --------------------------------------------------------------
 
+    /// @dev Reads the ACP job budget directly from the hooked ACP contract.
     function _getJobBudget(uint256 jobId) internal view returns (uint256 budget) {
         (bool ok, bytes memory data) = acpContract.staticcall(
             abi.encodeWithSignature("getJob(uint256)", jobId)

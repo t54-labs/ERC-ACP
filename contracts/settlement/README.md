@@ -22,3 +22,4 @@ The underwriting migration splits responsibilities across two layers:
 - Keep workflow legitimacy in the hook.
 - Keep economic state and dispute execution in settlement contracts.
 - Keep `claimRefund()` outside the hook surface.
+- Linked close jobs reuse the parent settlement identity and escrow. Because `orchestrateFunding(...)` does not create a fresh settlement position for that close leg, the close job's `jobSettlementState` intentionally remains `SettlementState.None` until a settlement-side action is taken against the shared position.
