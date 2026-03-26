@@ -216,7 +216,7 @@ Implementations MAY provide a `BaseACPHook` that routes the generic `beforeActio
 - Custom fee logic or payment splitting
 - Atomic side transfers (e.g. fund transfer hook)
 - Provider bidding (e.g. bidding hook)
-- Multi-contract hook systems (e.g. merchant custody underwriting / MCU)
+- Multi-contract hook systems (e.g. underwriting with separate workflow, evaluator, and settlement modules)
 
 ---
 
