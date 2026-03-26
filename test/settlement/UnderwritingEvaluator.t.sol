@@ -174,6 +174,21 @@ contract UnderwritingEvaluatorTest is Test {
         evaluator.completeBySig(_completeDecision(3), _signCompleteDecision(_completeDecision(3), closeUnderwriterPk));
     }
 
+    function testRejectBySigRejectsRootOpenAndCloseBeforeSubmit() public {
+        _seedJob(4, IAgenticCommerceKernel.JobStatus.Funded, rootUnderwriter);
+        _seedJob(5, IAgenticCommerceKernel.JobStatus.Funded, openUnderwriter);
+        _seedJob(6, IAgenticCommerceKernel.JobStatus.Funded, closeUnderwriter);
+
+        vm.expectRevert(UnderwritingEvaluator.WrongDecisionStatus.selector);
+        evaluator.rejectBySig(_rejectDecision(4), _signRejectDecision(_rejectDecision(4), rootUnderwriterPk));
+
+        vm.expectRevert(UnderwritingEvaluator.WrongDecisionStatus.selector);
+        evaluator.rejectBySig(_rejectDecision(5), _signRejectDecision(_rejectDecision(5), openUnderwriterPk));
+
+        vm.expectRevert(UnderwritingEvaluator.WrongDecisionStatus.selector);
+        evaluator.rejectBySig(_rejectDecision(6), _signRejectDecision(_rejectDecision(6), closeUnderwriterPk));
+    }
+
     function testCompleteBySigSucceedsAfterSubmittedAndEvidenceSubmitted() public {
         _seedJob(11, IAgenticCommerceKernel.JobStatus.Submitted, rootUnderwriter);
 

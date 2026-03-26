@@ -10,6 +10,30 @@ import "../../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingWorkflowCore.sol";
 import "../../mocks/MockERC20.sol";
 
+contract MockHookParitySettlementCoordinator {
+    AgenticCommerceHooked public immutable acp;
+    UnderwritingHook public immutable hook;
+    address public immutable collateralManager;
+    uint64 public immutable disputeWindowSeconds = 1 days;
+
+    constructor(address acpContract_, address hook_) {
+        acp = AgenticCommerceHooked(acpContract_);
+        hook = UnderwritingHook(hook_);
+        collateralManager = address(this);
+    }
+
+    function orchestrateFunding(uint256 jobId) external {
+        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
+        if (job.hook != address(hook)) revert UnderwritingCoordinator.WrongHook();
+        if (job.status != AgenticCommerceHooked.JobStatus.Funded) revert UnderwritingCoordinator.WrongJobStatus();
+        if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.FeeEscrowed) {
+            revert UnderwritingCoordinator.InvalidState();
+        }
+
+        hook.markProtected(jobId);
+    }
+}
+
 contract UnderwritingHookParityTest is Test {
     uint256 internal constant JOB_BUDGET = 100e6;
 
@@ -24,7 +48,7 @@ contract UnderwritingHookParityTest is Test {
     MockERC20 internal usdc;
     AgenticCommerceHooked internal acp;
     UnderwritingHook internal hook;
-    UnderwritingCoordinator internal coordinator;
+    MockHookParitySettlementCoordinator internal coordinator;
     UnderwritingEvaluator internal evaluator;
 
     function setUp() public {
@@ -34,7 +58,7 @@ contract UnderwritingHookParityTest is Test {
         acp = new AgenticCommerceHooked(address(usdc), treasury);
         hook = new UnderwritingHook(address(acp), address(this));
         evaluator = new UnderwritingEvaluator(address(acp), address(hook));
-        coordinator = new UnderwritingCoordinator(address(acp), address(hook));
+        coordinator = new MockHookParitySettlementCoordinator(address(acp), address(hook));
 
         hook.setWiring(address(evaluator), address(coordinator));
 
@@ -42,6 +66,15 @@ contract UnderwritingHookParityTest is Test {
 
         vm.prank(client);
         usdc.approve(address(acp), type(uint256).max);
+    }
+
+    function testSetWiringRejectsDeprecatedHookOnlyCoordinator() public {
+        UnderwritingHook secondHook = new UnderwritingHook(address(acp), address(this));
+        UnderwritingEvaluator secondEvaluator = new UnderwritingEvaluator(address(acp), address(secondHook));
+        UnderwritingCoordinator deprecatedCoordinator = new UnderwritingCoordinator(address(acp), address(secondHook));
+
+        vm.expectRevert(UnderwritingHook.InvalidWiring.selector);
+        secondHook.setWiring(address(secondEvaluator), address(deprecatedCoordinator));
     }
 
     function testRootAndCloseLifecycleMatchesCanonicalHookParity() public {

@@ -9,6 +9,30 @@ import "../../../contracts/hooks/underwriting/UnderwritingHook.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../mocks/MockERC20.sol";
 
+contract MockEvaluatorParitySettlementCoordinator {
+    AgenticCommerceHooked public immutable acp;
+    UnderwritingHook public immutable hook;
+    address public immutable collateralManager;
+    uint64 public immutable disputeWindowSeconds = 1 days;
+
+    constructor(address acpContract_, address hook_) {
+        acp = AgenticCommerceHooked(acpContract_);
+        hook = UnderwritingHook(hook_);
+        collateralManager = address(this);
+    }
+
+    function orchestrateFunding(uint256 jobId) external {
+        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
+        if (job.hook != address(hook)) revert UnderwritingCoordinator.WrongHook();
+        if (job.status != AgenticCommerceHooked.JobStatus.Funded) revert UnderwritingCoordinator.WrongJobStatus();
+        if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.FeeEscrowed) {
+            revert UnderwritingCoordinator.InvalidState();
+        }
+
+        hook.markProtected(jobId);
+    }
+}
+
 contract UnderwritingEvaluatorParityTest is Test {
     bytes32 internal constant COMPLETE_TYPEHASH =
         keccak256("CompleteDecision(uint256 jobId,bytes32 reason,uint64 deadline,uint256 nonce)");
@@ -25,7 +49,7 @@ contract UnderwritingEvaluatorParityTest is Test {
     MockERC20 internal usdc;
     AgenticCommerceHooked internal acp;
     UnderwritingHook internal hook;
-    UnderwritingCoordinator internal coordinator;
+    MockEvaluatorParitySettlementCoordinator internal coordinator;
     UnderwritingEvaluator internal evaluator;
 
     function setUp() public {
@@ -35,7 +59,7 @@ contract UnderwritingEvaluatorParityTest is Test {
         acp = new AgenticCommerceHooked(address(usdc), treasury);
         hook = new UnderwritingHook(address(acp), address(this));
         evaluator = new UnderwritingEvaluator(address(acp), address(hook));
-        coordinator = new UnderwritingCoordinator(address(acp), address(hook));
+        coordinator = new MockEvaluatorParitySettlementCoordinator(address(acp), address(hook));
 
         hook.setWiring(address(evaluator), address(coordinator));
         hook.registerUnderwriter(underwriter);

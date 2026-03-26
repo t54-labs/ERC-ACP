@@ -12,6 +12,11 @@ interface IUnderwritingWiringTarget {
     function hook() external view returns (address);
 }
 
+interface IUnderwritingSettlementCoordinatorTarget is IUnderwritingWiringTarget {
+    function collateralManager() external view returns (address);
+    function disputeWindowSeconds() external view returns (uint64);
+}
+
 contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWorkflowCore {
     error OnlyAdmin();
     error OnlyCoordinator();
@@ -45,7 +50,7 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
         if (evaluator_ == address(0) || coordinator_ == address(0)) revert ZeroAddress();
 
         _assertWiringTarget(evaluator_);
-        _assertWiringTarget(coordinator_);
+        _assertSettlementCoordinatorTarget(coordinator_);
 
         evaluator = evaluator_;
         coordinator = coordinator_;
@@ -148,6 +153,22 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
         try wiringTarget.hook() returns (address targetHook) {
             if (targetHook != address(this)) revert InvalidWiring();
         } catch {
+            revert InvalidWiring();
+        }
+    }
+
+    function _assertSettlementCoordinatorTarget(address target) internal view {
+        _assertWiringTarget(target);
+
+        IUnderwritingSettlementCoordinatorTarget coordinatorTarget = IUnderwritingSettlementCoordinatorTarget(target);
+
+        try coordinatorTarget.collateralManager() returns (address targetCollateralManager) {
+            if (targetCollateralManager == address(0)) revert InvalidWiring();
+        } catch {
+            revert InvalidWiring();
+        }
+
+        try coordinatorTarget.disputeWindowSeconds() returns (uint64) {} catch {
             revert InvalidWiring();
         }
     }

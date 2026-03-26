@@ -270,6 +270,32 @@ contract UnderwritingSettlementCoordinatorTest is Test {
         );
     }
 
+    function testSettleExpiryRevertsWhenAlreadySettled() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        hook.seedJob(ROOT_JOB_ID, UnderwritingTypes.SidecarState.FeeEscrowed, _commit(0), ROOT_JOB_ID);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Funded));
+
+        vm.prank(provider);
+        usdc.approve(predictedEscrow, COLLATERAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(predictedEscrow, PRINCIPAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(address(collateralManager), PREMIUM_AMOUNT);
+
+        coordinator.orchestrateFunding(ROOT_JOB_ID, _permit(ROOT_JOB_ID, ROOT_JOB_ID, predictedEscrow), bytes("permit-sig"));
+
+        hook.setSidecarState(ROOT_JOB_ID, UnderwritingTypes.SidecarState.Protected);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Expired));
+
+        coordinator.settleExpiry(ROOT_JOB_ID);
+
+        vm.expectRevert(UnderwritingSettlementCoordinator.InvalidState.selector);
+        coordinator.settleExpiry(ROOT_JOB_ID);
+    }
+
     function testSettleExpiryForCloseJobSkipsTimeoutClaim() public {
         address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
 

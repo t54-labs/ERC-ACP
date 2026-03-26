@@ -208,6 +208,7 @@ contract UnderwritingSettlementCoordinator {
     function settleExpiry(uint256 jobId) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Expired) revert WrongJobStatus();
+        if (jobSettlementState[jobId] == SettlementTypes.SettlementState.ExpirySettled) revert InvalidState();
 
         UnderwritingTypes.UnderwriteCommit memory commit = hook.getCommit(jobId);
         UnderwritingTypes.SidecarState state = hook.jobSidecarState(jobId);
