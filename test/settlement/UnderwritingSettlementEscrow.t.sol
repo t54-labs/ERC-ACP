@@ -141,7 +141,7 @@ contract UnderwritingSettlementEscrowTest is Test {
             user: client,
             merchant: address(escrow),
             underwriter: underwriter,
-            decisionFeeUsdc: PREMIUM_AMOUNT,
+            underwritingPremiumUsdc: PREMIUM_AMOUNT,
             merchantExecutionWallet: merchantExecutionWallet,
             requiredCollateralUsdc: COLLATERAL_AMOUNT,
             fundedPrincipalUsdc: PRINCIPAL_AMOUNT,

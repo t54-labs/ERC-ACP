@@ -17,6 +17,9 @@ contract UnderwritingHookSystemExampleTest is Test {
         "SuccessDisputeDecision(uint256 jobId,bytes32 disputeHash,uint8 outcome,bytes32 reason,bytes32 slashAttestationHash,uint64 deadline,uint256 nonce)"
     );
 
+    uint256 internal constant PROVIDER_BUDGET = 40e6;
+    uint256 internal constant UNDERWRITING_PREMIUM = 5e6;
+
     address internal treasury = makeAddr("treasury");
     address internal client = makeAddr("client");
     address internal provider = makeAddr("provider");
@@ -69,7 +72,7 @@ contract UnderwritingHookSystemExampleTest is Test {
 
         UnderwritingHookSystemExample.PermitInputs memory permitInputs = UnderwritingHookSystemExample.PermitInputs({
             merchantExecutionWallet: merchantExecutionWallet,
-            decisionFeeUsdc: 5e6,
+            underwritingPremiumUsdc: 5e6,
             requiredCollateralUsdc: 100e6,
             fundedPrincipalUsdc: 80e6,
             coverageCapUsdc: 100e6,
@@ -82,11 +85,11 @@ contract UnderwritingHookSystemExampleTest is Test {
         ICollateralManager.UnderwritePermit memory permit =
             example.buildPermit(jobId, client, predictedEscrow, commit, permitInputs);
 
-        usdc.approve(address(acp), permitInputs.decisionFeeUsdc);
-        usdc.approve(address(collateralManager), permitInputs.decisionFeeUsdc);
+        usdc.approve(address(acp), PROVIDER_BUDGET);
+        usdc.approve(address(collateralManager), permitInputs.underwritingPremiumUsdc);
         usdc.approve(predictedEscrow, permitInputs.fundedPrincipalUsdc);
-        acp.setBudget(jobId, permitInputs.decisionFeeUsdc, example.encodeCommit(commit));
-        acp.fund(jobId, permitInputs.decisionFeeUsdc, bytes(""));
+        acp.setBudget(jobId, PROVIDER_BUDGET, example.encodeCommit(commit));
+        acp.fund(jobId, PROVIDER_BUDGET, bytes(""));
         vm.stopPrank();
 
         vm.prank(provider);
@@ -429,7 +432,7 @@ contract UnderwritingHookSystemExampleTest is Test {
     {
         return UnderwritingHookSystemExample.PermitInputs({
             merchantExecutionWallet: merchantExecutionWallet,
-            decisionFeeUsdc: 5e6,
+            underwritingPremiumUsdc: 5e6,
             requiredCollateralUsdc: 100e6,
             fundedPrincipalUsdc: 80e6,
             coverageCapUsdc: 100e6,
@@ -446,13 +449,13 @@ contract UnderwritingHookSystemExampleTest is Test {
         address predictedEscrow
     ) internal returns (ICollateralManager.UnderwritePermit memory permit) {
         vm.startPrank(client);
-        usdc.approve(address(acp), permitInputs.decisionFeeUsdc);
+        usdc.approve(address(acp), PROVIDER_BUDGET);
         if (commit.parentJobId == 0) {
-            usdc.approve(address(collateralManager), permitInputs.decisionFeeUsdc);
+            usdc.approve(address(collateralManager), permitInputs.underwritingPremiumUsdc);
             usdc.approve(predictedEscrow, permitInputs.fundedPrincipalUsdc);
         }
-        acp.setBudget(jobId, permitInputs.decisionFeeUsdc, example.encodeCommit(commit));
-        acp.fund(jobId, permitInputs.decisionFeeUsdc, bytes(""));
+        acp.setBudget(jobId, PROVIDER_BUDGET, example.encodeCommit(commit));
+        acp.fund(jobId, PROVIDER_BUDGET, bytes(""));
         vm.stopPrank();
 
         permit = example.buildPermit(jobId, client, predictedEscrow, commit, permitInputs);

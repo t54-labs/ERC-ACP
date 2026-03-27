@@ -33,7 +33,7 @@ contract UnderwritingHookSystemExample {
     /// @notice Inputs used to assemble an underwriting permit.
     struct PermitInputs {
         address merchantExecutionWallet;
-        uint256 decisionFeeUsdc;
+        uint256 underwritingPremiumUsdc;
         uint256 requiredCollateralUsdc;
         uint256 fundedPrincipalUsdc;
         uint256 coverageCapUsdc;
@@ -148,7 +148,7 @@ contract UnderwritingHookSystemExample {
             user: client,
             merchant: escrow,
             underwriter: commit.underwriter,
-            decisionFeeUsdc: inputs.decisionFeeUsdc,
+            underwritingPremiumUsdc: inputs.underwritingPremiumUsdc,
             merchantExecutionWallet: inputs.merchantExecutionWallet,
             requiredCollateralUsdc: inputs.requiredCollateralUsdc,
             fundedPrincipalUsdc: inputs.fundedPrincipalUsdc,

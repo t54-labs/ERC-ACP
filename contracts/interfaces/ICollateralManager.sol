@@ -18,7 +18,7 @@ interface ICollateralManager {
         address user;
         address merchant;
         address underwriter;
-        uint256 decisionFeeUsdc;
+        uint256 underwritingPremiumUsdc;
         address merchantExecutionWallet;
         uint256 requiredCollateralUsdc;
         uint256 fundedPrincipalUsdc;

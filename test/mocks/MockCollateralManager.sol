@@ -61,8 +61,8 @@ contract MockCollateralManager is ICollateralManager {
             lockedCollateralBySettlementJobId[permit.settlementJobId] += permit.requiredCollateralUsdc;
         }
 
-        if (permit.decisionFeeUsdc > 0) {
-            usdc.safeTransferFrom(permit.user, address(this), permit.decisionFeeUsdc);
+        if (permit.underwritingPremiumUsdc > 0) {
+            usdc.safeTransferFrom(permit.user, address(this), permit.underwritingPremiumUsdc);
         }
     }
 

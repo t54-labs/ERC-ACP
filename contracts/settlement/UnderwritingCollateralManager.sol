@@ -34,7 +34,7 @@ contract UnderwritingCollateralManager is ICollateralManager, EIP712, Reentrancy
     // ── EIP-712 typehash ────────────────────────────────────────────────
 
     bytes32 public constant UNDERWRITE_PERMIT_TYPEHASH = keccak256(
-        "UnderwritePermit(uint256 jobId,uint256 settlementJobId,address safe,address user,address merchant,address underwriter,uint256 decisionFeeUsdc,address merchantExecutionWallet,uint256 requiredCollateralUsdc,uint256 fundedPrincipalUsdc,uint256 coverageCapUsdc,uint64 validUntil,uint64 executeUntil,bytes32 policyHash,uint256 nonce,uint64 unlockAt)"
+        "UnderwritePermit(uint256 jobId,uint256 settlementJobId,address safe,address user,address merchant,address underwriter,uint256 underwritingPremiumUsdc,address merchantExecutionWallet,uint256 requiredCollateralUsdc,uint256 fundedPrincipalUsdc,uint256 coverageCapUsdc,uint64 validUntil,uint64 executeUntil,bytes32 policyHash,uint256 nonce,uint64 unlockAt)"
     );
 
     bytes32 public constant SLASH_ATTESTATION_TYPEHASH = keccak256(
@@ -145,11 +145,11 @@ contract UnderwritingCollateralManager is ICollateralManager, EIP712, Reentrancy
         }
 
         // Pull premium from permit.user and forward to premium recipient immediately
-        if (permit.decisionFeeUsdc > 0) {
-            usdc.safeTransferFrom(permit.user, recipients.premiumRecipient, permit.decisionFeeUsdc);
+        if (permit.underwritingPremiumUsdc > 0) {
+            usdc.safeTransferFrom(permit.user, recipients.premiumRecipient, permit.underwritingPremiumUsdc);
         }
 
-        emit CollateralLocked(permit.settlementJobId, permit.underwriter, permit.requiredCollateralUsdc, permit.decisionFeeUsdc);
+        emit CollateralLocked(permit.settlementJobId, permit.underwriter, permit.requiredCollateralUsdc, permit.underwritingPremiumUsdc);
     }
 
     /// @inheritdoc ICollateralManager
@@ -266,7 +266,7 @@ contract UnderwritingCollateralManager is ICollateralManager, EIP712, Reentrancy
                 permit.user,
                 permit.merchant,
                 permit.underwriter,
-                permit.decisionFeeUsdc,
+                permit.underwritingPremiumUsdc,
                 permit.merchantExecutionWallet,
                 permit.requiredCollateralUsdc,
                 permit.fundedPrincipalUsdc,

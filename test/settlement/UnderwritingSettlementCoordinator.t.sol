@@ -125,6 +125,7 @@ contract UnderwritingSettlementCoordinatorTest is Test {
     uint256 internal constant COLLATERAL_AMOUNT = 100e18;
     uint256 internal constant PRINCIPAL_AMOUNT = 80e18;
     uint256 internal constant PREMIUM_AMOUNT = 5e18;
+    uint256 internal constant PROVIDER_BUDGET = 40e18;
     uint64 internal constant DISPUTE_WINDOW = 1 days;
 
     address internal client = makeAddr("client");
@@ -590,7 +591,7 @@ contract UnderwritingSettlementCoordinatorTest is Test {
             evaluator: evaluatorAddr,
             hook: address(hook),
             description: "underwriting settlement job",
-            budget: PREMIUM_AMOUNT,
+            budget: PROVIDER_BUDGET,
             expiredAt: block.timestamp + 1 days,
             status: status_
         });
@@ -633,7 +634,7 @@ contract UnderwritingSettlementCoordinatorTest is Test {
             user: client,
             merchant: escrowAddress,
             underwriter: underwriter,
-            decisionFeeUsdc: PREMIUM_AMOUNT,
+            underwritingPremiumUsdc: PREMIUM_AMOUNT,
             merchantExecutionWallet: merchantExecutionWallet,
             requiredCollateralUsdc: COLLATERAL_AMOUNT,
             fundedPrincipalUsdc: PRINCIPAL_AMOUNT,

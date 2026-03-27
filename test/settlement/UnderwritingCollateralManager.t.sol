@@ -29,7 +29,7 @@ contract UnderwritingCollateralManagerTest is Test {
     // ── domain separator for EIP-712 signatures ─────────────────────────
 
     bytes32 internal constant UNDERWRITE_PERMIT_TYPEHASH = keccak256(
-        "UnderwritePermit(uint256 jobId,uint256 settlementJobId,address safe,address user,address merchant,address underwriter,uint256 decisionFeeUsdc,address merchantExecutionWallet,uint256 requiredCollateralUsdc,uint256 fundedPrincipalUsdc,uint256 coverageCapUsdc,uint64 validUntil,uint64 executeUntil,bytes32 policyHash,uint256 nonce,uint64 unlockAt)"
+        "UnderwritePermit(uint256 jobId,uint256 settlementJobId,address safe,address user,address merchant,address underwriter,uint256 underwritingPremiumUsdc,address merchantExecutionWallet,uint256 requiredCollateralUsdc,uint256 fundedPrincipalUsdc,uint256 coverageCapUsdc,uint64 validUntil,uint64 executeUntil,bytes32 policyHash,uint256 nonce,uint64 unlockAt)"
     );
 
     function setUp() public {
@@ -439,7 +439,7 @@ contract UnderwritingCollateralManagerTest is Test {
             user: user,
             merchant: escrow,
             underwriter: underwriter,
-            decisionFeeUsdc: PREMIUM_AMOUNT,
+            underwritingPremiumUsdc: PREMIUM_AMOUNT,
             merchantExecutionWallet: merchantExecutionWallet,
             requiredCollateralUsdc: COLLATERAL_AMOUNT,
             fundedPrincipalUsdc: PRINCIPAL_AMOUNT,
@@ -466,7 +466,7 @@ contract UnderwritingCollateralManagerTest is Test {
                 permit.user,
                 permit.merchant,
                 permit.underwriter,
-                permit.decisionFeeUsdc,
+                permit.underwritingPremiumUsdc,
                 permit.merchantExecutionWallet,
                 permit.requiredCollateralUsdc,
                 permit.fundedPrincipalUsdc,
