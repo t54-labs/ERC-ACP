@@ -34,6 +34,9 @@ contract UnderwritingSharedEnvFlowTest is Test {
     bytes32 internal constant UNDERWRITE_PERMIT_TYPEHASH = keccak256(
         "UnderwritePermit(uint256 jobId,uint256 settlementJobId,address safe,address user,address merchant,address underwriter,uint256 underwritingPremiumUsdc,address merchantExecutionWallet,uint256 requiredCollateralUsdc,uint256 fundedPrincipalUsdc,uint256 coverageCapUsdc,uint64 validUntil,uint64 executeUntil,bytes32 policyHash,uint256 nonce,uint64 unlockAt)"
     );
+    bytes32 internal constant SLASH_ATTESTATION_TYPEHASH = keccak256(
+        "SlashAttestation(uint256 settlementJobId,address safe,address user,address merchant,uint256 slashAmountUsdc,bytes32 reasonCode,uint64 validUntil,uint256 nonce)"
+    );
 
     // ── amounts ─────────────────────────────────────────────────────────
 
@@ -321,6 +324,109 @@ contract UnderwritingSharedEnvFlowTest is Test {
     }
 
     // ════════════════════════════════════════════════════════════════════
+    // Test 4: Success -> dispute slash -> collateral to recovery
+    // ════════════════════════════════════════════════════════════════════
+
+    function testSuccessDisputeSlashRoutesCollateralToRecovery() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        vm.startPrank(client);
+        uint256 jobId = acp.createJob(
+            provider,
+            address(evaluator),
+            block.timestamp + 1 days,
+            "shared env e2e dispute slash",
+            address(hook)
+        );
+        vm.stopPrank();
+
+        UnderwritingTypes.UnderwriteCommit memory commit = _buildCommit(0, false);
+        _fundAndOrchestrateJob(jobId, commit, 7, 1 hours, predictedEscrow);
+
+        UnderwritingTypes.SubmitEvidence memory evidence = _evidence(commit, "bundle");
+        vm.prank(provider);
+        acp.submit(jobId, evidence.bundleHash, abi.encode(evidence));
+
+        vm.prank(client);
+        evaluator.confirmByClient(jobId, keccak256("client-happy"));
+
+        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
+        assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Completed), "job not completed");
+
+        uint256 recoveryBefore = usdc.balanceOf(recoveryRecipient);
+        uint256 providerBefore = usdc.balanceOf(provider);
+
+        ICollateralManager.SlashAttestation memory attestation = ICollateralManager.SlashAttestation({
+            settlementJobId: jobId,
+            safe: predictedEscrow,
+            user: client,
+            merchant: predictedEscrow,
+            slashAmountUsdc: REQUIRED_COLLATERAL,
+            reasonCode: keccak256("dispute-reason"),
+            validUntil: uint64(block.timestamp + 1 days),
+            nonce: 42
+        });
+
+        bytes memory slashSig = _signSlashAttestation(attestation);
+        coordinator.applySuccessDisputeSlash(jobId, attestation, slashSig);
+
+        assertEq(
+            usdc.balanceOf(recoveryRecipient) - recoveryBefore,
+            REQUIRED_COLLATERAL,
+            "collateral not sent to recovery"
+        );
+        assertEq(usdc.balanceOf(provider), providerBefore, "provider should receive nothing on full slash");
+        assertEq(
+            uint256(coordinator.jobSettlementState(jobId)),
+            uint256(SettlementTypes.SettlementState.RecoverySettled),
+            "settlement not finalized as recovery"
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // Test 5: Funding semantics — budget in ACP, premium to recipient,
+    //         manager holds no premium
+    // ════════════════════════════════════════════════════════════════════
+
+    function testFundingSemanticsShowPremiumImmediatelyRoutedAndBudgetStaysInACP() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        vm.startPrank(client);
+        uint256 jobId = acp.createJob(
+            provider,
+            address(evaluator),
+            block.timestamp + 1 days,
+            "shared env funding semantics",
+            address(hook)
+        );
+        vm.stopPrank();
+
+        UnderwritingTypes.UnderwriteCommit memory commit = _buildCommit(0, false);
+
+        uint256 acpBefore = usdc.balanceOf(address(acp));
+        uint256 premiumRecipientBefore = usdc.balanceOf(premiumRecipient);
+        uint256 managerBefore = usdc.balanceOf(address(collateralManager));
+
+        _fundAndOrchestrateJob(jobId, commit, 7, 0, predictedEscrow);
+
+        assertEq(
+            usdc.balanceOf(address(acp)) - acpBefore,
+            PROVIDER_BUDGET,
+            "job.budget should stay in ACP path"
+        );
+        assertEq(
+            usdc.balanceOf(premiumRecipient) - premiumRecipientBefore,
+            UNDERWRITING_PREMIUM,
+            "premium should go immediately to premiumRecipient"
+        );
+        assertEq(
+            usdc.balanceOf(address(collateralManager)) - managerBefore,
+            REQUIRED_COLLATERAL,
+            "manager should hold only collateral, not premium"
+        );
+    }
+
+    // ════════════════════════════════════════════════════════════════════
     // Internal helpers
     // ════════════════════════════════════════════════════════════════════
 
@@ -500,6 +606,45 @@ contract UnderwritingSharedEnvFlowTest is Test {
                 keccak256(bytes("1")),
                 block.chainid,
                 address(collateralManager)
+            )
+        );
+    }
+
+    function _signSlashAttestation(ICollateralManager.SlashAttestation memory attestation)
+        internal
+        view
+        returns (bytes memory)
+    {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                SLASH_ATTESTATION_TYPEHASH,
+                attestation.settlementJobId,
+                attestation.safe,
+                attestation.user,
+                attestation.merchant,
+                attestation.slashAmountUsdc,
+                attestation.reasonCode,
+                attestation.validUntil,
+                attestation.nonce
+            )
+        );
+
+        bytes32 digest = keccak256(
+            abi.encodePacked("\x19\x01", _coordinatorDomainSeparator(), structHash)
+        );
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(underwriterPk, digest);
+        return abi.encodePacked(r, s, v);
+    }
+
+    function _coordinatorDomainSeparator() internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256(bytes("Underwriting Settlement Coordinator")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(coordinator)
             )
         );
     }

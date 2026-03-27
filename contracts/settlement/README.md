@@ -4,7 +4,7 @@ The underwriting migration splits responsibilities across two layers:
 
 - `hooks/underwriting/` is the workflow authority. It admits commits, gates fund/submit transitions, checks evidence, and preserves parent/close job linkage.
 - `settlement/UnderwritingSettlementCoordinator.sol` owns premium, collateral, principal, expiry, and dispute orchestration.
-- `settlement/UnderwritingEvaluator.sol` keeps canonical complete/reject timing and adds post-success dispute signature routing.
+- `settlement/UnderwritingEvaluator.sol` keeps canonical complete/reject timing with client confirmation windows.
 - `settlement/UnderwritingSettlementEscrow.sol` is the token-moving adapter created on demand when funding is orchestrated.
 
 ## Typical Flow
@@ -24,9 +24,9 @@ The underwriting migration splits responsibilities across two layers:
 | **Success** (provider completes) | Returned to provider via escrow | `releaseCollateral()` |
 | **Timeout** (job expires) | Sent to underwriter's recovery recipient | `settleExpiry()` |
 | **Reject** (underwriter rejects) | Sent to underwriter's recovery recipient | `finalizeRejectedJob()` |
-| **Slash** (post-success dispute) | Sent to underwriter's recovery recipient | `applySuccessDisputeDecision()` |
+| **Slash** (post-success dispute) | Sent to underwriter's recovery recipient | `applySuccessDisputeSlash()` |
 
-Both timeout and reject paths route through `claimTimeout()` on the collateral manager, which sends locked collateral to the underwriter's configured `recoveryRecipient`.
+Both timeout and reject paths route through `claimTimeout()` on the collateral manager, which sends locked collateral to the underwriter's configured `recoveryRecipient`. The slash path routes through `slash()` on the collateral manager via the escrow's `slashCollateral()`, sending the slashed portion to the recovery recipient and any remainder back to the provider.
 
 ## Deployment
 

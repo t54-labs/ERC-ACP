@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "../interfaces/IAgenticCommerceKernel.sol";
 import "../interfaces/ICollateralManager.sol";
 import "../hooks/underwriting/UnderwritingHook.sol";
@@ -14,13 +16,21 @@ import "./UnderwritingSettlementEscrow.sol";
  * @dev The underwriting hook remains the workflow authority, while this contract
  *      owns settlement-specific state and deploys per-settlement escrows on demand.
  */
-contract UnderwritingSettlementCoordinator {
+contract UnderwritingSettlementCoordinator is EIP712 {
     error WrongJobStatus();
     error WrongHook();
     error InvalidState();
     error MissingEscrow();
     error PermitMismatch();
     error TooEarly();
+    error TooLate();
+    error SlashExpired();
+    error InvalidSlashSignature();
+    error SlashAttestationMismatch();
+
+    bytes32 internal constant SLASH_ATTESTATION_TYPEHASH = keccak256(
+        "SlashAttestation(uint256 settlementJobId,address safe,address user,address merchant,uint256 slashAmountUsdc,bytes32 reasonCode,uint64 validUntil,uint256 nonce)"
+    );
 
     IAgenticCommerceKernel public immutable acp;
     UnderwritingHook public immutable hook;
@@ -34,6 +44,7 @@ contract UnderwritingSettlementCoordinator {
     event CollateralReleased(uint256 indexed jobId, uint256 indexed settlementJobId);
     event ExpirySettled(uint256 indexed jobId, uint256 indexed settlementJobId, bool timeoutClaimed);
     event RejectedJobFinalized(uint256 indexed jobId, uint256 indexed settlementJobId);
+    event DisputeSlashApplied(uint256 indexed jobId, uint256 indexed settlementJobId, uint256 slashAmountUsdc);
 
     /// @notice Deploys the settlement coordinator for a specific ACP kernel, hook, and collateral manager.
     /// @param acp_ The ACP kernel used for job state reads.
@@ -43,7 +54,7 @@ contract UnderwritingSettlementCoordinator {
         IAgenticCommerceKernel acp_,
         UnderwritingHook hook_,
         ICollateralManager collateralManager_
-    ) {
+    ) EIP712("Underwriting Settlement Coordinator", "1") {
         acp = acp_;
         hook = hook_;
         collateralManager = collateralManager_;
@@ -169,6 +180,59 @@ contract UnderwritingSettlementCoordinator {
         emit RejectedJobFinalized(jobId, hook.jobSettlementJobId(jobId));
     }
 
+    /// @notice Slashes provider collateral for a post-success dispute, routing it to the underwriter's recovery recipient.
+    /// @param jobId The completed ACP job whose collateral should be slashed.
+    /// @param attestation The slash attestation describing the collateral seizure.
+    /// @param slashSig The underwriter signature authorizing the slash.
+    function applySuccessDisputeSlash(
+        uint256 jobId,
+        ICollateralManager.SlashAttestation calldata attestation,
+        bytes calldata slashSig
+    ) external {
+        IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
+        if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
+        if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.SuccessPendingConfirmation) {
+            revert InvalidState();
+        }
+        _assertSettlementEntrypointAllowed(jobId);
+
+        SettlementTypes.SettlementState currentState = jobSettlementState[jobId];
+        UnderwritingTypes.UnderwriteCommit memory commit = hook.getCommit(jobId);
+        bool isCloseJob = commit.parentJobId != 0;
+
+        if (isCloseJob) {
+            if (currentState != SettlementTypes.SettlementState.None) revert InvalidState();
+        } else {
+            if (
+                currentState != SettlementTypes.SettlementState.PrincipalReleased
+                    && currentState != SettlementTypes.SettlementState.CollateralLocked
+            ) {
+                revert InvalidState();
+            }
+        }
+
+        uint64 unlock = unlockAtByJobId[jobId];
+        if (unlock == 0 || block.timestamp >= unlock) revert TooLate();
+        if (block.timestamp > attestation.validUntil) revert SlashExpired();
+
+        uint256 settlementJobId_ = hook.jobSettlementJobId(jobId);
+        UnderwritingSettlementEscrow escrow = _escrow(jobId);
+
+        if (
+            attestation.settlementJobId != settlementJobId_ || attestation.safe != address(escrow)
+                || attestation.user != job.client || attestation.merchant != address(escrow)
+        ) {
+            revert SlashAttestationMismatch();
+        }
+
+        _verifySlashSig(commit.underwriter, attestation, slashSig);
+
+        escrow.slashCollateral(attestation, slashSig);
+        jobSettlementState[jobId] = SettlementTypes.SettlementState.RecoverySettled;
+
+        emit DisputeSlashApplied(jobId, settlementJobId_, attestation.slashAmountUsdc);
+    }
+
     /// @dev Loads a job from ACP and ensures it is wired to this underwriting hook.
     function _getHookedJob(uint256 jobId) internal view returns (IAgenticCommerceKernel.Job memory job) {
         job = acp.getJob(jobId);
@@ -224,6 +288,34 @@ contract UnderwritingSettlementCoordinator {
         UnderwritingTypes.UnderwriteCommit memory commit = hook.getCommit(jobId);
         if (commit.parentJobId == 0 && commit.allowCloseJob && !hook.isAwaitingClose(jobId)) {
             revert InvalidState();
+        }
+    }
+
+    /// @dev Verifies an EIP-712 slash attestation signature against the expected underwriter.
+    function _verifySlashSig(
+        address expectedUnderwriter,
+        ICollateralManager.SlashAttestation calldata attestation,
+        bytes calldata slashSig
+    ) internal view {
+        bytes32 structHash = keccak256(
+            abi.encode(
+                SLASH_ATTESTATION_TYPEHASH,
+                attestation.settlementJobId,
+                attestation.safe,
+                attestation.user,
+                attestation.merchant,
+                attestation.slashAmountUsdc,
+                attestation.reasonCode,
+                attestation.validUntil,
+                attestation.nonce
+            )
+        );
+
+        bytes32 digest = _hashTypedDataV4(structHash);
+        address recovered = ECDSA.recover(digest, slashSig);
+
+        if (recovered != expectedUnderwriter || expectedUnderwriter == address(0)) {
+            revert InvalidSlashSignature();
         }
     }
 }

@@ -47,6 +47,7 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
     event DeliveryConfirmationRequested(uint256 indexed jobId, uint256 indexed settlementJobId, uint256 deliveryNonce);
     event CollateralReleaseRequested(uint256 indexed jobId, uint256 indexed settlementJobId);
     event TimeoutClaimRequested(uint256 indexed jobId, uint256 indexed settlementJobId);
+    event SlashExecuted(uint256 indexed jobId, uint256 indexed settlementJobId, uint256 slashAmountUsdc);
     event ResidualSweepRequested(uint256 indexed jobId, address indexed provider);
 
     modifier onlyController() {
@@ -180,6 +181,26 @@ contract UnderwritingSettlementEscrow is ReentrancyGuard {
         }
 
         emit CollateralReleaseRequested(jobId, settlementJobId);
+    }
+
+    /// @notice Slashes locked collateral through the collateral manager and returns any remainder to the provider.
+    /// @param attestation The slash attestation describing the collateral seizure.
+    /// @param slashSig The signature authorizing the slash (verified upstream by the coordinator).
+    function slashCollateral(ICollateralManager.SlashAttestation calldata attestation, bytes calldata slashSig)
+        external
+        onlyController
+        nonReentrant
+    {
+        _requireConfigured();
+
+        collateralManager.slash(attestation, slashSig);
+
+        uint256 balance = usdc.balanceOf(address(this));
+        if (balance > 0) {
+            usdc.safeTransfer(provider, balance);
+        }
+
+        emit SlashExecuted(jobId, settlementJobId, attestation.slashAmountUsdc);
     }
 
     /// @notice Claims the timeout path for this settlement through the collateral manager.
