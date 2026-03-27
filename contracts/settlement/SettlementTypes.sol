@@ -18,7 +18,8 @@ library SettlementTypes {
         SuccessSettled,
         SuccessSlashed,
         RejectSettled,
-        ExpirySettled
+        ExpirySettled,
+        RecoverySettled
     }
 
     /// @notice Resolution options available for a post-success dispute.

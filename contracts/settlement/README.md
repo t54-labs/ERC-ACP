@@ -17,6 +17,17 @@ The underwriting migration splits responsibilities across two layers:
 6. Submit evidence through ACP.
 7. Finalize with the evaluator's underwriter signature path.
 
+## Collateral Routing
+
+| Outcome | Collateral destination | Coordinator method |
+|---------|------------------------|--------------------|
+| **Success** (provider completes) | Returned to provider via escrow | `releaseCollateral()` |
+| **Timeout** (job expires) | Sent to underwriter's recovery recipient | `settleExpiry()` |
+| **Reject** (underwriter rejects) | Sent to underwriter's recovery recipient | `finalizeRejectedJob()` |
+| **Slash** (post-success dispute) | Sent to underwriter's recovery recipient | `applySuccessDisputeDecision()` |
+
+Both timeout and reject paths route through `claimTimeout()` on the collateral manager, which sends locked collateral to the underwriter's configured `recoveryRecipient`.
+
 ## Boundary Rules
 
 - Keep workflow legitimacy in the hook.

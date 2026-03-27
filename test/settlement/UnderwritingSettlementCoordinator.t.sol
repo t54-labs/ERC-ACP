@@ -337,7 +337,7 @@ contract UnderwritingSettlementCoordinatorTest is Test {
         );
     }
 
-    function testFinalizeRejectedJobSweepsResidualToProvider() public {
+    function testFinalizeRejectedJobRoutesCollateralToRecovery() public {
         address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
 
         hook.seedJob(ROOT_JOB_ID, UnderwritingTypes.SidecarState.FeeEscrowed, _commit(0), ROOT_JOB_ID);
@@ -354,16 +354,13 @@ contract UnderwritingSettlementCoordinatorTest is Test {
 
         coordinator.orchestrateFunding(ROOT_JOB_ID, _permit(ROOT_JOB_ID, ROOT_JOB_ID, predictedEscrow), bytes("permit-sig"));
 
-        UnderwritingSettlementEscrow escrow = UnderwritingSettlementEscrow(predictedEscrow);
-        usdc.mint(address(escrow), 33e18);
-
         hook.setSidecarState(ROOT_JOB_ID, UnderwritingTypes.SidecarState.RejectSettled);
         acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Rejected));
 
-        uint256 providerBalanceBefore = usdc.balanceOf(provider);
         coordinator.finalizeRejectedJob(ROOT_JOB_ID);
 
-        assertEq(usdc.balanceOf(provider), providerBalanceBefore + 33e18);
+        assertTrue(collateralManager.claimTimeoutCalled());
+        assertEq(collateralManager.lastTimeoutSettlementJobId(), ROOT_JOB_ID);
         assertEq(
             uint256(coordinator.jobSettlementState(ROOT_JOB_ID)),
             uint256(SettlementTypes.SettlementState.RejectSettled)
@@ -620,6 +617,110 @@ contract UnderwritingSettlementCoordinatorTest is Test {
             validUntil: 0,
             nonce: 0
         });
+    }
+
+    function testTimeoutMovesCollateralToRecoveryRecipient() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        hook.seedJob(ROOT_JOB_ID, UnderwritingTypes.SidecarState.FeeEscrowed, _commit(0), ROOT_JOB_ID);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Funded));
+
+        vm.prank(provider);
+        usdc.approve(predictedEscrow, COLLATERAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(predictedEscrow, PRINCIPAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(address(collateralManager), PREMIUM_AMOUNT);
+
+        coordinator.orchestrateFunding(ROOT_JOB_ID, _permit(ROOT_JOB_ID, ROOT_JOB_ID, predictedEscrow), bytes("permit-sig"));
+
+        // Move to expired
+        hook.setSidecarState(ROOT_JOB_ID, UnderwritingTypes.SidecarState.Protected);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Expired));
+
+        coordinator.settleExpiry(ROOT_JOB_ID);
+
+        // Verify claimTimeout was called (routes to recovery recipient in real collateral manager)
+        assertTrue(collateralManager.claimTimeoutCalled());
+        assertEq(collateralManager.lastTimeoutSettlementJobId(), ROOT_JOB_ID);
+        assertEq(
+            uint256(coordinator.jobSettlementState(ROOT_JOB_ID)),
+            uint256(SettlementTypes.SettlementState.ExpirySettled)
+        );
+    }
+
+    function testRejectRoutesCollateralToRecoveryRecipient() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        hook.seedJob(ROOT_JOB_ID, UnderwritingTypes.SidecarState.FeeEscrowed, _commit(0), ROOT_JOB_ID);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Funded));
+
+        vm.prank(provider);
+        usdc.approve(predictedEscrow, COLLATERAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(predictedEscrow, PRINCIPAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(address(collateralManager), PREMIUM_AMOUNT);
+
+        coordinator.orchestrateFunding(ROOT_JOB_ID, _permit(ROOT_JOB_ID, ROOT_JOB_ID, predictedEscrow), bytes("permit-sig"));
+
+        // Move to rejected
+        hook.setSidecarState(ROOT_JOB_ID, UnderwritingTypes.SidecarState.RejectSettled);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Rejected));
+
+        coordinator.finalizeRejectedJob(ROOT_JOB_ID);
+
+        // Verify claimTimeout was called (routes collateral to recovery recipient)
+        assertTrue(collateralManager.claimTimeoutCalled());
+        assertEq(collateralManager.lastTimeoutSettlementJobId(), ROOT_JOB_ID);
+        assertEq(
+            uint256(coordinator.jobSettlementState(ROOT_JOB_ID)),
+            uint256(SettlementTypes.SettlementState.RejectSettled)
+        );
+    }
+
+    function testSuccessReleasesCollateralBackToProvider() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        hook.seedJob(ROOT_JOB_ID, UnderwritingTypes.SidecarState.FeeEscrowed, _commit(0), ROOT_JOB_ID);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Funded));
+
+        vm.prank(provider);
+        usdc.approve(predictedEscrow, COLLATERAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(predictedEscrow, PRINCIPAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(address(collateralManager), PREMIUM_AMOUNT);
+
+        coordinator.orchestrateFunding(ROOT_JOB_ID, _permit(ROOT_JOB_ID, ROOT_JOB_ID, predictedEscrow), bytes("permit-sig"));
+
+        // Move to completed
+        hook.setSidecarState(ROOT_JOB_ID, UnderwritingTypes.SidecarState.SuccessPendingConfirmation);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Completed));
+
+        vm.prank(provider);
+        coordinator.requestCollateralRelease(ROOT_JOB_ID);
+
+        // Warp past both dispute window and unlockAt
+        vm.warp(block.timestamp + 4 days);
+
+        uint256 providerBalanceBefore = usdc.balanceOf(provider);
+        coordinator.releaseCollateral(ROOT_JOB_ID);
+
+        // Verify releaseCollateral was called (returns collateral to provider via escrow)
+        assertTrue(collateralManager.releaseCollateralCalled());
+        assertEq(collateralManager.lastReleasedSettlementJobId(), ROOT_JOB_ID);
+        assertEq(usdc.balanceOf(provider), providerBalanceBefore + COLLATERAL_AMOUNT);
+        assertEq(
+            uint256(coordinator.jobSettlementState(ROOT_JOB_ID)),
+            uint256(SettlementTypes.SettlementState.SuccessSettled)
+        );
     }
 
     function _permit(uint256 jobId, uint256 settlementJobId, address escrowAddress)

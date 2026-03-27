@@ -264,7 +264,7 @@ contract UnderwritingSettlementCoordinator {
         emit ExpirySettled(jobId, hook.jobSettlementJobId(jobId), true);
     }
 
-    /// @notice Finalizes rejected jobs and sweeps any residual escrow balance.
+    /// @notice Finalizes rejected jobs by routing locked collateral to the underwriter's recovery recipient.
     /// @param jobId The rejected ACP job to finalize.
     function finalizeRejectedJob(uint256 jobId) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
@@ -273,7 +273,7 @@ contract UnderwritingSettlementCoordinator {
 
         address escrowAddress = settlementEscrow(jobId);
         if (escrowAddress != address(0)) {
-            UnderwritingSettlementEscrow(escrowAddress).sweepResidualToProvider();
+            UnderwritingSettlementEscrow(escrowAddress).claimTimeout();
         }
         jobSettlementState[jobId] = SettlementTypes.SettlementState.RejectSettled;
 
