@@ -1,0 +1,3 @@
+[submodule "contracts/acp"]
+	path = contracts/acp
+	url = https://github.com/erc-8183/base-contracts
