@@ -28,6 +28,24 @@ The underwriting migration splits responsibilities across two layers:
 
 Both timeout and reject paths route through `claimTimeout()` on the collateral manager, which sends locked collateral to the underwriter's configured `recoveryRecipient`.
 
+## Deployment
+
+Use `script/DeployUnderwritingSharedEnv.s.sol` to deploy all five contracts and wire them in a single transaction. After deployment:
+
+1. **Register underwriters** via `script/RegisterUnderwriter.s.sol` (hook admin only).
+2. **Configure recipients** via `script/ConfigureUnderwriterRecipients.s.sol` (called by the underwriter).
+
+Required environment variables for deployment:
+
+| Variable | Description |
+|----------|-------------|
+| `PRIVATE_KEY` | Deployer private key (becomes hook admin) |
+| `BASE_USDC` | USDC token address |
+| `ACP_TREASURY` | Platform fee treasury |
+| `CLIENT_CONFIRMATION_WINDOW` | Seconds the client may confirm before underwriter takes over |
+
+The dispute window (`disputeWindowSeconds`) is set to 0 in the deploy script for shared-env iteration. To change it, modify the script before running.
+
 ## Boundary Rules
 
 - Keep workflow legitimacy in the hook.
