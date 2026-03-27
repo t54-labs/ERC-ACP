@@ -33,6 +33,7 @@ abstract contract UnderwritingWorkflowCore {
     mapping(uint256 => uint256) internal parentJobIdByCloseJobId;
     mapping(uint256 => uint256) internal activeCloseJobIdByParentJobId;
     mapping(uint256 => UnderwritingTypes.SidecarState) internal sidecarStateByJobId;
+    mapping(uint256 => uint64) internal submittedAtByJobId;
 
     /// @dev Registers an underwriter for future standalone commitments.
     function _registerUnderwriter(address underwriter) internal {
@@ -74,6 +75,11 @@ abstract contract UnderwritingWorkflowCore {
     /// @dev Returns the underwriting sidecar state for `jobId`.
     function _getSidecarState(uint256 jobId) internal view returns (UnderwritingTypes.SidecarState) {
         return sidecarStateByJobId[jobId];
+    }
+
+    /// @dev Returns the submission timestamp for `jobId`.
+    function _getSubmittedAt(uint256 jobId) internal view returns (uint64) {
+        return submittedAtByJobId[jobId];
     }
 
     /// @dev Returns the canonical settlement job id for `jobId`.
@@ -171,6 +177,7 @@ abstract contract UnderwritingWorkflowCore {
         if (evidence.termsHash != commit.termsHash) revert EvidenceMismatch();
 
         sidecarStateByJobId[jobId] = UnderwritingTypes.SidecarState.EvidenceSubmitted;
+        submittedAtByJobId[jobId] = uint64(block.timestamp);
     }
 
     /// @dev Ensures signed completion or rejection decisions execute from the correct sidecar state.

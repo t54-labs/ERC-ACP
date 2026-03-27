@@ -42,4 +42,9 @@ interface IUnderwritingHookView {
     /// @param parentJobId The parent job identifier to inspect.
     /// @return The linked close job id, or zero when unset.
     function getActiveCloseJobId(uint256 parentJobId) external view returns (uint256);
+
+    /// @notice Returns the timestamp at which the provider submitted evidence for `jobId`.
+    /// @param jobId The job identifier to inspect.
+    /// @return The submission timestamp, or zero when no submission has been recorded.
+    function jobSubmittedAt(uint256 jobId) external view returns (uint64);
 }

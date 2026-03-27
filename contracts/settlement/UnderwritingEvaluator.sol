@@ -39,6 +39,9 @@ contract UnderwritingEvaluator is EIP712 {
     error InvalidSigner(address expected, address actual);
     error WrongDecisionStatus();
     error WrongDecisionState();
+    error ClientConfirmationStillOpen();
+    error ClientConfirmationWindowElapsed();
+    error OnlyClient();
 
     bytes32 private constant COMPLETE_TYPEHASH =
         keccak256("CompleteDecision(uint256 jobId,bytes32 reason,uint64 deadline,uint256 nonce)");
@@ -51,6 +54,7 @@ contract UnderwritingEvaluator is EIP712 {
     IAgenticCommerceKernel public immutable acp;
     IUnderwritingHookView public immutable hook;
     ISettlementDisputeCoordinator public immutable coordinator;
+    uint64 public immutable clientConfirmationWindowSeconds;
 
     mapping(address underwriter => mapping(uint256 nonce => bool used)) public usedNonces;
 
@@ -58,13 +62,18 @@ contract UnderwritingEvaluator is EIP712 {
     /// @param acp_ The ACP kernel used for job state reads and decisions.
     /// @param hook_ The underwriting hook view used for sidecar state reads.
     /// @param coordinator_ The settlement coordinator that handles success disputes.
-    constructor(IAgenticCommerceKernel acp_, IUnderwritingHookView hook_, address coordinator_)
-        EIP712("Underwriting Settlement Evaluator", "1")
-    {
+    /// @param clientConfirmationWindowSeconds_ The duration after submission during which only the client may confirm.
+    constructor(
+        IAgenticCommerceKernel acp_,
+        IUnderwritingHookView hook_,
+        address coordinator_,
+        uint64 clientConfirmationWindowSeconds_
+    ) EIP712("Underwriting Settlement Evaluator", "1") {
         if (coordinator_ == address(0)) revert InvalidCoordinator();
         acp = acp_;
         hook = hook_;
         coordinator = ISettlementDisputeCoordinator(coordinator_);
+        clientConfirmationWindowSeconds = clientConfirmationWindowSeconds_;
     }
 
     /// @notice Completes a submitted job using an underwriter-signed decision.
@@ -80,6 +89,8 @@ contract UnderwritingEvaluator is EIP712 {
         if (hook.jobSidecarState(decision.jobId) != UnderwritingTypes.SidecarState.EvidenceSubmitted) {
             revert WrongDecisionState();
         }
+
+        _requireClientWindowElapsed(decision.jobId);
 
         _consumeNonceAndVerifySigner(
             hook.jobUnderwriter(decision.jobId),
@@ -106,6 +117,8 @@ contract UnderwritingEvaluator is EIP712 {
         if (hook.jobSidecarState(decision.jobId) != UnderwritingTypes.SidecarState.EvidenceSubmitted) {
             revert WrongDecisionState();
         }
+
+        _requireClientWindowElapsed(decision.jobId);
 
         _consumeNonceAndVerifySigner(
             hook.jobUnderwriter(decision.jobId),
@@ -156,6 +169,34 @@ contract UnderwritingEvaluator is EIP712 {
         );
 
         coordinator.applySuccessDisputeDecision(decision, attestation, slashSig);
+    }
+
+    /// @notice Allows the client to confirm a submitted job within the confirmation window.
+    /// @param jobId The job to confirm.
+    /// @param reason The client's confirmation reason code.
+    function confirmByClient(uint256 jobId, bytes32 reason) external {
+        IAgenticCommerceKernel.Job memory job = acp.getJob(jobId);
+        if (msg.sender != job.client) revert OnlyClient();
+        if (job.status != IAgenticCommerceKernel.JobStatus.Submitted) revert WrongDecisionStatus();
+        if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.EvidenceSubmitted) {
+            revert WrongDecisionState();
+        }
+
+        uint64 submittedAt = hook.jobSubmittedAt(jobId);
+        if (submittedAt == 0 || block.timestamp > submittedAt + clientConfirmationWindowSeconds) {
+            revert ClientConfirmationWindowElapsed();
+        }
+
+        acp.complete(jobId, reason, bytes(""));
+    }
+
+    /// @dev Reverts when the client confirmation window has not yet elapsed.
+    function _requireClientWindowElapsed(uint256 jobId) internal view {
+        if (clientConfirmationWindowSeconds == 0) return;
+        uint64 submittedAt = hook.jobSubmittedAt(jobId);
+        if (submittedAt != 0 && block.timestamp <= submittedAt + clientConfirmationWindowSeconds) {
+            revert ClientConfirmationStillOpen();
+        }
     }
 
     /// @dev Reverts on reused nonces or invalid signatures before consuming the nonce.

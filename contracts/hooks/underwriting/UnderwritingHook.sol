@@ -129,6 +129,11 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
         return _getActiveCloseJobId(parentJobId);
     }
 
+    /// @inheritdoc IUnderwritingHookView
+    function jobSubmittedAt(uint256 jobId) external view returns (uint64) {
+        return _getSubmittedAt(jobId);
+    }
+
     /// @notice Marks a funded underwriting job as protected after settlement orchestration.
     /// @param jobId The funded job to transition.
     function markProtected(uint256 jobId) external onlyCoordinator {

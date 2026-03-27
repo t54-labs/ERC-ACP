@@ -72,6 +72,7 @@ contract MockSettlementEvaluatorHook is IUnderwritingHookView {
     mapping(uint256 jobId => UnderwritingTypes.SidecarState) internal sidecarStates;
     mapping(uint256 jobId => address) internal underwriters;
     mapping(uint256 jobId => uint256) internal settlementJobIds;
+    mapping(uint256 jobId => uint64) internal submittedAts;
 
     function seed(
         uint256 jobId,
@@ -82,6 +83,10 @@ contract MockSettlementEvaluatorHook is IUnderwritingHookView {
         sidecarStates[jobId] = sidecarState;
         underwriters[jobId] = underwriter;
         settlementJobIds[jobId] = settlementJobId;
+    }
+
+    function setSubmittedAt(uint256 jobId, uint64 submittedAt) external {
+        submittedAts[jobId] = submittedAt;
     }
 
     function getCommit(uint256) external pure returns (UnderwritingTypes.UnderwriteCommit memory) {
@@ -110,6 +115,10 @@ contract MockSettlementEvaluatorHook is IUnderwritingHookView {
 
     function getActiveCloseJobId(uint256) external pure returns (uint256) {
         return 0;
+    }
+
+    function jobSubmittedAt(uint256 jobId) external view returns (uint64) {
+        return submittedAts[jobId];
     }
 }
 
@@ -156,7 +165,7 @@ contract UnderwritingEvaluatorTest is Test {
         acp = new MockSettlementEvaluatorACP(address(0xBEEF));
         hook = new MockSettlementEvaluatorHook();
         coordinator = new MockSuccessDisputeCoordinator();
-        evaluator = new UnderwritingEvaluator(acp, hook, address(coordinator));
+        evaluator = new UnderwritingEvaluator(acp, hook, address(coordinator), 1 hours);
     }
 
     function testCompleteBySigRejectsRootOpenAndCloseBeforeSubmit() public {
@@ -249,6 +258,50 @@ contract UnderwritingEvaluatorTest is Test {
 
         assertTrue(coordinator.applyCalled());
         assertEq(coordinator.lastJobId(), 22);
+    }
+
+    function testClientCanConfirmWithinConfirmationWindow() public {
+        uint256 jobId = 100;
+        _seedJob(jobId, IAgenticCommerceKernel.JobStatus.Submitted, rootUnderwriter);
+        hook.setSubmittedAt(jobId, uint64(block.timestamp));
+
+        address client = makeAddr("client");
+        vm.prank(client);
+        evaluator.confirmByClient(jobId, keccak256("client-confirmed"));
+
+        assertTrue(acp.completeCalled());
+        assertEq(acp.lastCompletedJobId(), jobId);
+    }
+
+    function testUnderwriterCannotResolveBeforeClientWindowExpires() public {
+        uint256 jobId = 101;
+        _seedJob(jobId, IAgenticCommerceKernel.JobStatus.Submitted, rootUnderwriter);
+        hook.setSubmittedAt(jobId, uint64(block.timestamp));
+
+        UnderwritingTypes.CompleteDecision memory decision = _completeDecision(jobId);
+
+        vm.expectRevert(UnderwritingEvaluator.ClientConfirmationStillOpen.selector);
+        evaluator.completeBySig(decision, _signCompleteDecision(decision, rootUnderwriterPk));
+    }
+
+    function testUnderwriterCanResolveAfterClientWindowExpires() public {
+        uint256 jobId = 102;
+        _seedJob(jobId, IAgenticCommerceKernel.JobStatus.Submitted, rootUnderwriter);
+        hook.setSubmittedAt(jobId, uint64(block.timestamp));
+
+        vm.warp(block.timestamp + 1 hours + 1);
+
+        UnderwritingTypes.CompleteDecision memory decision = UnderwritingTypes.CompleteDecision({
+            jobId: jobId,
+            reason: keccak256("complete"),
+            deadline: uint64(block.timestamp + 1 days),
+            nonce: jobId
+        });
+
+        evaluator.completeBySig(decision, _signCompleteDecision(decision, rootUnderwriterPk));
+
+        assertTrue(acp.completeCalled());
+        assertEq(acp.lastCompletedJobId(), jobId);
     }
 
     function _seedJob(uint256 jobId, IAgenticCommerceKernel.JobStatus status_, address underwriter) internal {

@@ -77,7 +77,7 @@ contract UnderwritingHookSystemExample {
         coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp_)), hook, collateralManager_, disputeWindowSeconds_
         );
-        evaluator = new UnderwritingEvaluator(IAgenticCommerceKernel(address(acp_)), hook, address(coordinator));
+        evaluator = new UnderwritingEvaluator(IAgenticCommerceKernel(address(acp_)), hook, address(coordinator), 0);
 
         hook.setWiring(address(evaluator), address(coordinator));
 
