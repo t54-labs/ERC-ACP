@@ -184,6 +184,7 @@ contract UnderwritingSharedEnvFlowTest is Test {
 
         // ── Release collateral (unlockAt from permit is 0; no dispute window) ──
         uint256 providerBefore = usdc.balanceOf(provider);
+        coordinator.requestCollateralRelease(jobId);
         coordinator.releaseCollateral(jobId);
 
         // Assert collateral returned to provider
@@ -353,6 +354,11 @@ contract UnderwritingSharedEnvFlowTest is Test {
         AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
         assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Completed), "job not completed");
 
+        vm.prank(provider);
+        coordinator.requestCollateralRelease(jobId);
+        vm.prank(client);
+        coordinator.openSuccessDispute(jobId, keccak256("success-dispute"));
+
         uint256 recoveryBefore = usdc.balanceOf(recoveryRecipient);
         uint256 providerBefore = usdc.balanceOf(provider);
 
@@ -424,6 +430,115 @@ contract UnderwritingSharedEnvFlowTest is Test {
             REQUIRED_COLLATERAL,
             "manager should hold only collateral, not premium"
         );
+    }
+
+    function testSlashRevertsWithoutOpenDispute() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        vm.startPrank(client);
+        uint256 jobId = acp.createJob(
+            provider,
+            address(evaluator),
+            block.timestamp + 1 days,
+            "slash without dispute",
+            address(hook)
+        );
+        vm.stopPrank();
+
+        UnderwritingTypes.UnderwriteCommit memory commit = _buildCommit(0, false);
+        _fundAndOrchestrateJob(jobId, commit, 7, 1 hours, predictedEscrow);
+
+        UnderwritingTypes.SubmitEvidence memory evidence = _evidence(commit, "bundle");
+        vm.prank(provider);
+        acp.submit(jobId, evidence.bundleHash, abi.encode(evidence));
+
+        vm.prank(client);
+        evaluator.confirmByClient(jobId, keccak256("client-happy"));
+
+        vm.prank(provider);
+        coordinator.requestCollateralRelease(jobId);
+
+        ICollateralManager.SlashAttestation memory attestation = ICollateralManager.SlashAttestation({
+            settlementJobId: jobId,
+            safe: predictedEscrow,
+            user: client,
+            merchant: predictedEscrow,
+            slashAmountUsdc: REQUIRED_COLLATERAL,
+            reasonCode: keccak256("dispute-reason"),
+            validUntil: uint64(block.timestamp + 1 days),
+            nonce: 99
+        });
+        bytes memory slashSig = _signSlashAttestation(attestation);
+
+        vm.expectRevert(UnderwritingSettlementCoordinator.InvalidState.selector);
+        coordinator.applySuccessDisputeSlash(jobId, attestation, slashSig);
+    }
+
+    function testOpenDisputeRevertsAfterUnlockAt() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        vm.startPrank(client);
+        uint256 jobId = acp.createJob(
+            provider,
+            address(evaluator),
+            block.timestamp + 1 days,
+            "dispute too late",
+            address(hook)
+        );
+        vm.stopPrank();
+
+        UnderwritingTypes.UnderwriteCommit memory commit = _buildCommit(0, false);
+        _fundAndOrchestrateJob(jobId, commit, 7, 1 hours, predictedEscrow);
+
+        UnderwritingTypes.SubmitEvidence memory evidence = _evidence(commit, "bundle");
+        vm.prank(provider);
+        acp.submit(jobId, evidence.bundleHash, abi.encode(evidence));
+
+        vm.prank(client);
+        evaluator.confirmByClient(jobId, keccak256("client-happy"));
+
+        vm.prank(provider);
+        coordinator.requestCollateralRelease(jobId);
+
+        vm.warp(block.timestamp + uint256(1 hours) + 1);
+
+        vm.expectRevert(UnderwritingSettlementCoordinator.TooLate.selector);
+        vm.prank(client);
+        coordinator.openSuccessDispute(jobId, keccak256("success-dispute"));
+    }
+
+    function testReleaseRevertsWhenDisputeOpen() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        vm.startPrank(client);
+        uint256 jobId = acp.createJob(
+            provider,
+            address(evaluator),
+            block.timestamp + 1 days,
+            "release blocked dispute",
+            address(hook)
+        );
+        vm.stopPrank();
+
+        UnderwritingTypes.UnderwriteCommit memory commit = _buildCommit(0, false);
+        _fundAndOrchestrateJob(jobId, commit, 7, 1 hours, predictedEscrow);
+
+        UnderwritingTypes.SubmitEvidence memory evidence = _evidence(commit, "bundle");
+        vm.prank(provider);
+        acp.submit(jobId, evidence.bundleHash, abi.encode(evidence));
+
+        vm.prank(client);
+        evaluator.confirmByClient(jobId, keccak256("client-happy"));
+
+        vm.prank(provider);
+        coordinator.requestCollateralRelease(jobId);
+        vm.prank(client);
+        coordinator.openSuccessDispute(jobId, keccak256("success-dispute"));
+
+        vm.warp(block.timestamp + uint256(1 hours) + 1);
+
+        vm.expectRevert(UnderwritingSettlementCoordinator.InvalidState.selector);
+        coordinator.releaseCollateral(jobId);
     }
 
     // ════════════════════════════════════════════════════════════════════

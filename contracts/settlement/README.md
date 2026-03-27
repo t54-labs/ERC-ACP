@@ -26,7 +26,7 @@ The underwriting migration splits responsibilities across two layers:
 | **Reject** (underwriter rejects) | Sent to underwriter's recovery recipient | `finalizeRejectedJob()` |
 | **Slash** (post-success dispute) | Sent to underwriter's recovery recipient | `applySuccessDisputeSlash()` |
 
-Both timeout and reject paths route through `claimTimeout()` on the collateral manager, which sends locked collateral to the underwriter's configured `recoveryRecipient`. The slash path routes through `slash()` on the collateral manager via the escrow's `slashCollateral()`, sending the slashed portion to the recovery recipient and any remainder back to the provider.
+Both timeout and reject paths route through `claimTimeout()` on the collateral manager, which sends locked collateral to the underwriter's configured `recoveryRecipient`. The slash path requires an explicit dispute ceremony: the provider first calls `requestCollateralRelease()` (→ `SuccessPendingRelease`), then the client may call `openSuccessDispute()` before `unlockAt` (→ `DisputeOpen`), and finally the underwriter resolves the dispute via `applySuccessDisputeSlash()` (→ `RecoverySettled`). The slash itself routes through `slash()` on the collateral manager via the escrow's `slashCollateral()`, sending the slashed portion to the recovery recipient and any remainder back to the provider.
 
 ## Deployment
 
@@ -44,7 +44,7 @@ Required environment variables for deployment:
 | `ACP_TREASURY` | Platform fee treasury |
 | `CLIENT_CONFIRMATION_WINDOW` | Seconds the client may confirm before underwriter takes over |
 
-The dispute window (`disputeWindowSeconds`) is set to 0 in the deploy script for shared-env iteration. To change it, modify the script before running.
+The post-success dispute window is controlled per-job by the `unlockAt` field in the underwriting permit, not by a deploy-time parameter. When `unlockAt` is 0, collateral can be released immediately after `requestCollateralRelease()` with no dispute window.
 
 ## Boundary Rules
 

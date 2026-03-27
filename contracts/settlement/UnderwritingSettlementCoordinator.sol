@@ -27,6 +27,7 @@ contract UnderwritingSettlementCoordinator is EIP712 {
     error SlashExpired();
     error InvalidSlashSignature();
     error SlashAttestationMismatch();
+    error OnlyClient();
 
     bytes32 internal constant SLASH_ATTESTATION_TYPEHASH = keccak256(
         "SlashAttestation(uint256 settlementJobId,address safe,address user,address merchant,uint256 slashAmountUsdc,bytes32 reasonCode,uint64 validUntil,uint256 nonce)"
@@ -44,6 +45,8 @@ contract UnderwritingSettlementCoordinator is EIP712 {
     event CollateralReleased(uint256 indexed jobId, uint256 indexed settlementJobId);
     event ExpirySettled(uint256 indexed jobId, uint256 indexed settlementJobId, bool timeoutClaimed);
     event RejectedJobFinalized(uint256 indexed jobId, uint256 indexed settlementJobId);
+    event CollateralReleaseRequested(uint256 indexed jobId, uint256 indexed settlementJobId);
+    event SuccessDisputeOpened(uint256 indexed jobId, uint256 indexed settlementJobId, bytes32 reasonCode);
     event DisputeSlashApplied(uint256 indexed jobId, uint256 indexed settlementJobId, uint256 slashAmountUsdc);
 
     /// @notice Deploys the settlement coordinator for a specific ACP kernel, hook, and collateral manager.
@@ -104,9 +107,9 @@ contract UnderwritingSettlementCoordinator is EIP712 {
         emit FundingOrchestrated(jobId, address(escrow), settlementJobId);
     }
 
-    /// @notice Releases provider collateral once the unlock time has passed.
-    /// @param jobId The completed ACP job whose collateral should be released.
-    function releaseCollateral(uint256 jobId) external {
+    /// @notice Signals intent to reclaim provider collateral, opening a window for client disputes.
+    /// @param jobId The completed ACP job whose collateral the provider wants released.
+    function requestCollateralRelease(uint256 jobId) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
         if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.SuccessPendingConfirmation) {
@@ -128,6 +131,38 @@ contract UnderwritingSettlementCoordinator is EIP712 {
                 revert InvalidState();
             }
         }
+
+        jobSettlementState[jobId] = SettlementTypes.SettlementState.SuccessPendingRelease;
+
+        emit CollateralReleaseRequested(jobId, hook.jobSettlementJobId(jobId));
+    }
+
+    /// @notice Opens a post-success dispute, blocking collateral release until the underwriter resolves it.
+    /// @param jobId The completed ACP job being disputed.
+    /// @param reasonCode The client-supplied reason for the dispute.
+    function openSuccessDispute(uint256 jobId, bytes32 reasonCode) external {
+        IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
+        if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
+        if (msg.sender != job.client) revert OnlyClient();
+        if (jobSettlementState[jobId] != SettlementTypes.SettlementState.SuccessPendingRelease) revert InvalidState();
+
+        uint64 unlock = unlockAtByJobId[jobId];
+        if (unlock == 0 || block.timestamp >= unlock) revert TooLate();
+
+        jobSettlementState[jobId] = SettlementTypes.SettlementState.DisputeOpen;
+
+        emit SuccessDisputeOpened(jobId, hook.jobSettlementJobId(jobId), reasonCode);
+    }
+
+    /// @notice Releases provider collateral once the unlock time has passed and no dispute is open.
+    /// @param jobId The completed ACP job whose collateral should be released.
+    function releaseCollateral(uint256 jobId) external {
+        IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
+        if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
+        if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.SuccessPendingConfirmation) {
+            revert InvalidState();
+        }
+        if (jobSettlementState[jobId] != SettlementTypes.SettlementState.SuccessPendingRelease) revert InvalidState();
         if (unlockAtByJobId[jobId] != 0 && block.timestamp < unlockAtByJobId[jobId]) revert TooEarly();
 
         UnderwritingSettlementEscrow escrow = _escrow(jobId);
@@ -180,8 +215,8 @@ contract UnderwritingSettlementCoordinator is EIP712 {
         emit RejectedJobFinalized(jobId, hook.jobSettlementJobId(jobId));
     }
 
-    /// @notice Slashes provider collateral for a post-success dispute, routing it to the underwriter's recovery recipient.
-    /// @param jobId The completed ACP job whose collateral should be slashed.
+    /// @notice Resolves an open post-success dispute by slashing provider collateral to the underwriter's recovery recipient.
+    /// @param jobId The disputed ACP job whose collateral should be slashed.
     /// @param attestation The slash attestation describing the collateral seizure.
     /// @param slashSig The underwriter signature authorizing the slash.
     function applySuccessDisputeSlash(
@@ -191,30 +226,10 @@ contract UnderwritingSettlementCoordinator is EIP712 {
     ) external {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Completed) revert WrongJobStatus();
-        if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.SuccessPendingConfirmation) {
-            revert InvalidState();
-        }
-        _assertSettlementEntrypointAllowed(jobId);
-
-        SettlementTypes.SettlementState currentState = jobSettlementState[jobId];
-        UnderwritingTypes.UnderwriteCommit memory commit = hook.getCommit(jobId);
-        bool isCloseJob = commit.parentJobId != 0;
-
-        if (isCloseJob) {
-            if (currentState != SettlementTypes.SettlementState.None) revert InvalidState();
-        } else {
-            if (
-                currentState != SettlementTypes.SettlementState.PrincipalReleased
-                    && currentState != SettlementTypes.SettlementState.CollateralLocked
-            ) {
-                revert InvalidState();
-            }
-        }
-
-        uint64 unlock = unlockAtByJobId[jobId];
-        if (unlock == 0 || block.timestamp >= unlock) revert TooLate();
+        if (jobSettlementState[jobId] != SettlementTypes.SettlementState.DisputeOpen) revert InvalidState();
         if (block.timestamp > attestation.validUntil) revert SlashExpired();
 
+        UnderwritingTypes.UnderwriteCommit memory commit = hook.getCommit(jobId);
         uint256 settlementJobId_ = hook.jobSettlementJobId(jobId);
         UnderwritingSettlementEscrow escrow = _escrow(jobId);
 

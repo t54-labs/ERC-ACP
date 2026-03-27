@@ -168,6 +168,7 @@ contract UnderwritingHookSystemExampleTest is Test {
             uint256(UnderwritingTypes.SidecarState.SuccessPendingConfirmation)
         );
 
+        example.coordinator().requestCollateralRelease(jobId);
         example.coordinator().releaseCollateral(jobId);
 
         assertEq(
@@ -230,6 +231,7 @@ contract UnderwritingHookSystemExampleTest is Test {
         vm.warp(block.timestamp + uint256(permitInputs.unlockIn) + 1);
 
         uint256 providerBalanceBefore = usdc.balanceOf(provider);
+        example.coordinator().requestCollateralRelease(jobId);
         example.coordinator().releaseCollateral(jobId);
 
         assertEq(
@@ -301,6 +303,7 @@ contract UnderwritingHookSystemExampleTest is Test {
         vm.warp(block.timestamp + uint256(closePermitInputs.unlockIn) + 1);
 
         uint256 providerBalanceBefore = usdc.balanceOf(provider);
+        example.coordinator().requestCollateralRelease(closeJobId);
         example.coordinator().releaseCollateral(closeJobId);
 
         assertEq(

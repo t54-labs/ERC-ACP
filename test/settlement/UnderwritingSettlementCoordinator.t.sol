@@ -446,17 +446,20 @@ contract UnderwritingSettlementCoordinatorTest is Test {
 
         coordinator.orchestrateFunding(ROOT_JOB_ID, _permit(ROOT_JOB_ID, ROOT_JOB_ID, predictedEscrow), bytes("permit-sig"));
 
-        // Move to completed; settlement remains PrincipalReleased; sidecar SuccessPendingConfirmation
         hook.setSidecarState(ROOT_JOB_ID, UnderwritingTypes.SidecarState.SuccessPendingConfirmation);
         acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Completed));
 
-        // Past permit unlockAt (3 days from funding)
+        coordinator.requestCollateralRelease(ROOT_JOB_ID);
+        assertEq(
+            uint256(coordinator.jobSettlementState(ROOT_JOB_ID)),
+            uint256(SettlementTypes.SettlementState.SuccessPendingRelease)
+        );
+
         vm.warp(block.timestamp + 3 days + 1);
 
         uint256 providerBalanceBefore = usdc.balanceOf(provider);
         coordinator.releaseCollateral(ROOT_JOB_ID);
 
-        // Verify releaseCollateral was called (returns collateral to provider via escrow)
         assertTrue(collateralManager.releaseCollateralCalled());
         assertEq(collateralManager.lastReleasedSettlementJobId(), ROOT_JOB_ID);
         assertEq(usdc.balanceOf(provider), providerBalanceBefore + COLLATERAL_AMOUNT);
@@ -464,6 +467,78 @@ contract UnderwritingSettlementCoordinatorTest is Test {
             uint256(coordinator.jobSettlementState(ROOT_JOB_ID)),
             uint256(SettlementTypes.SettlementState.SuccessSettled)
         );
+    }
+
+    function _setupFundedJobCompletedSuccess(address predictedEscrow) internal {
+        hook.seedJob(ROOT_JOB_ID, UnderwritingTypes.SidecarState.FeeEscrowed, _commit(0), ROOT_JOB_ID);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Funded));
+
+        vm.prank(provider);
+        usdc.approve(predictedEscrow, COLLATERAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(predictedEscrow, PRINCIPAL_AMOUNT);
+
+        vm.prank(client);
+        usdc.approve(address(collateralManager), PREMIUM_AMOUNT);
+
+        coordinator.orchestrateFunding(ROOT_JOB_ID, _permit(ROOT_JOB_ID, ROOT_JOB_ID, predictedEscrow), bytes("permit-sig"));
+
+        hook.setSidecarState(ROOT_JOB_ID, UnderwritingTypes.SidecarState.SuccessPendingConfirmation);
+        acp.setJob(_job(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Completed));
+    }
+
+    function testReleaseRevertsWithoutPriorRequest() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+        _setupFundedJobCompletedSuccess(predictedEscrow);
+
+        vm.expectRevert(UnderwritingSettlementCoordinator.InvalidState.selector);
+        coordinator.releaseCollateral(ROOT_JOB_ID);
+    }
+
+    function testOpenDisputeRevertsWhenNotSuccessPendingRelease() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+        _setupFundedJobCompletedSuccess(predictedEscrow);
+
+        vm.prank(client);
+        vm.expectRevert(UnderwritingSettlementCoordinator.InvalidState.selector);
+        coordinator.openSuccessDispute(ROOT_JOB_ID, bytes32("reason"));
+    }
+
+    function testOpenDisputeRevertsAfterUnlockAt() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+        _setupFundedJobCompletedSuccess(predictedEscrow);
+
+        coordinator.requestCollateralRelease(ROOT_JOB_ID);
+        vm.warp(block.timestamp + 3 days + 1);
+
+        vm.prank(client);
+        vm.expectRevert(UnderwritingSettlementCoordinator.TooLate.selector);
+        coordinator.openSuccessDispute(ROOT_JOB_ID, bytes32("reason"));
+    }
+
+    function testOpenDisputeRevertsWhenCallerIsNotClient() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+        _setupFundedJobCompletedSuccess(predictedEscrow);
+
+        coordinator.requestCollateralRelease(ROOT_JOB_ID);
+
+        vm.prank(provider);
+        vm.expectRevert(UnderwritingSettlementCoordinator.OnlyClient.selector);
+        coordinator.openSuccessDispute(ROOT_JOB_ID, bytes32("reason"));
+    }
+
+    function testReleaseRevertsWhenDisputeIsOpen() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+        _setupFundedJobCompletedSuccess(predictedEscrow);
+
+        coordinator.requestCollateralRelease(ROOT_JOB_ID);
+
+        vm.prank(client);
+        coordinator.openSuccessDispute(ROOT_JOB_ID, bytes32("reason"));
+
+        vm.expectRevert(UnderwritingSettlementCoordinator.InvalidState.selector);
+        coordinator.releaseCollateral(ROOT_JOB_ID);
     }
 
     function _permit(uint256 jobId, uint256 settlementJobId, address escrowAddress)

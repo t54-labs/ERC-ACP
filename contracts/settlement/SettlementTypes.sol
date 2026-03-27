@@ -12,6 +12,8 @@ library SettlementTypes {
         EscrowConfigured,
         CollateralLocked,
         PrincipalReleased,
+        SuccessPendingRelease,
+        DisputeOpen,
         SuccessSettled,
         RejectSettled,
         ExpirySettled,
