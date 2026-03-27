@@ -103,7 +103,7 @@ contract UnderwritingCollateralManagerTest is Test {
         ) = cm.positionBySettlementJobId(SETTLEMENT_JOB_ID);
 
         assertEq(posUnderwriter, underwriter, "position underwriter wrong");
-        assertEq(posSafe, permit.safe, "position safe wrong");
+        assertEq(posSafe, escrow, "position safe should be the escrow (msg.sender)");
         assertEq(posUser, user, "position user wrong");
         assertEq(posMerchantWallet, merchantExecutionWallet, "position merchant wallet wrong");
         assertEq(posLocked, COLLATERAL_AMOUNT, "position locked amount wrong");
@@ -251,6 +251,167 @@ contract UnderwritingCollateralManagerTest is Test {
         cm.releasePrincipalToMerchant(permit, sig);
 
         assertEq(usdc.balanceOf(merchantExecutionWallet), PRINCIPAL_AMOUNT, "merchant should receive principal");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Access control: releaseCollateral requires escrow
+    // ══════════════════════════════════════════════════════════════════════
+
+    function testReleaseCollateralRevertsForNonEscrow() public {
+        _setRecipients();
+        _lockCollateral();
+
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        vm.expectRevert(UnderwritingCollateralManager.CallerNotEscrow.selector);
+        cm.releaseCollateral(SETTLEMENT_JOB_ID);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Access control: claimTimeout requires escrow
+    // ══════════════════════════════════════════════════════════════════════
+
+    function testClaimTimeoutRevertsForNonEscrow() public {
+        _setRecipients();
+        _lockCollateral();
+
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        vm.expectRevert(UnderwritingCollateralManager.CallerNotEscrow.selector);
+        cm.claimTimeout(SETTLEMENT_JOB_ID);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Access control: slash requires escrow
+    // ══════════════════════════════════════════════════════════════════════
+
+    function testSlashRevertsForNonEscrow() public {
+        _setRecipients();
+        _lockCollateral();
+
+        ICollateralManager.SlashAttestation memory attestation = ICollateralManager.SlashAttestation({
+            settlementJobId: SETTLEMENT_JOB_ID,
+            safe: escrow,
+            user: user,
+            merchant: escrow,
+            slashAmountUsdc: COLLATERAL_AMOUNT,
+            reasonCode: keccak256("fraud"),
+            validUntil: uint64(block.timestamp + 1 days),
+            nonce: 1
+        });
+
+        address attacker = makeAddr("attacker");
+        vm.prank(attacker);
+        vm.expectRevert(UnderwritingCollateralManager.CallerNotEscrow.selector);
+        cm.slash(attestation, bytes(""));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Double claimTimeout reverts
+    // ══════════════════════════════════════════════════════════════════════
+
+    function testDoubleClaimTimeoutReverts() public {
+        _setRecipients();
+        _lockCollateral();
+
+        vm.prank(escrow);
+        cm.claimTimeout(SETTLEMENT_JOB_ID);
+
+        vm.prank(escrow);
+        vm.expectRevert(UnderwritingCollateralManager.CollateralAlreadyRecovered.selector);
+        cm.claimTimeout(SETTLEMENT_JOB_ID);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // claimTimeout then releaseCollateral reverts
+    // ══════════════════════════════════════════════════════════════════════
+
+    function testClaimTimeoutThenReleaseCollateralReverts() public {
+        _setRecipients();
+        _lockCollateral();
+
+        vm.prank(escrow);
+        cm.claimTimeout(SETTLEMENT_JOB_ID);
+
+        vm.prank(escrow);
+        vm.expectRevert(UnderwritingCollateralManager.CollateralAlreadyRecovered.selector);
+        cm.releaseCollateral(SETTLEMENT_JOB_ID);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // releaseCollateral then claimTimeout reverts
+    // ══════════════════════════════════════════════════════════════════════
+
+    function testReleaseCollateralThenClaimTimeoutReverts() public {
+        _setRecipients();
+        _lockCollateral();
+
+        vm.prank(escrow);
+        cm.releaseCollateral(SETTLEMENT_JOB_ID);
+
+        vm.prank(escrow);
+        vm.expectRevert(UnderwritingCollateralManager.CollateralAlreadyReleased.selector);
+        cm.claimTimeout(SETTLEMENT_JOB_ID);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // slash then releaseCollateral reverts
+    // ══════════════════════════════════════════════════════════════════════
+
+    function testSlashThenReleaseCollateralReverts() public {
+        _setRecipients();
+        _lockCollateral();
+
+        ICollateralManager.SlashAttestation memory attestation = ICollateralManager.SlashAttestation({
+            settlementJobId: SETTLEMENT_JOB_ID,
+            safe: escrow,
+            user: user,
+            merchant: escrow,
+            slashAmountUsdc: COLLATERAL_AMOUNT,
+            reasonCode: keccak256("fraud"),
+            validUntil: uint64(block.timestamp + 1 days),
+            nonce: 1
+        });
+
+        vm.prank(escrow);
+        cm.slash(attestation, bytes(""));
+
+        vm.prank(escrow);
+        vm.expectRevert(UnderwritingCollateralManager.CollateralAlreadyRecovered.selector);
+        cm.releaseCollateral(SETTLEMENT_JOB_ID);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    // Partial slash returns remainder to escrow
+    // ══════════════════════════════════════════════════════════════════════
+
+    function testPartialSlashReturnsRemainderToEscrow() public {
+        _setRecipients();
+        _lockCollateral();
+
+        uint256 slashAmount = 40e6;
+        uint256 remainder = COLLATERAL_AMOUNT - slashAmount;
+
+        uint256 recoveryBefore = usdc.balanceOf(recoveryRecipient);
+        uint256 escrowBefore = usdc.balanceOf(escrow);
+
+        ICollateralManager.SlashAttestation memory attestation = ICollateralManager.SlashAttestation({
+            settlementJobId: SETTLEMENT_JOB_ID,
+            safe: escrow,
+            user: user,
+            merchant: escrow,
+            slashAmountUsdc: slashAmount,
+            reasonCode: keccak256("partial-fraud"),
+            validUntil: uint64(block.timestamp + 1 days),
+            nonce: 1
+        });
+
+        vm.prank(escrow);
+        cm.slash(attestation, bytes(""));
+
+        assertEq(usdc.balanceOf(recoveryRecipient), recoveryBefore + slashAmount, "recovery should receive slash amount");
+        assertEq(usdc.balanceOf(escrow), escrowBefore + remainder, "escrow should receive remainder");
+        assertEq(usdc.balanceOf(address(cm)), 0, "CM should have zero balance after partial slash");
     }
 
     // ══════════════════════════════════════════════════════════════════════

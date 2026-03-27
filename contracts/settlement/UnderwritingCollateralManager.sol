@@ -29,7 +29,7 @@ contract UnderwritingCollateralManager is ICollateralManager, EIP712, Reentrancy
     error PrincipalAlreadyReleased();
     error CollateralAlreadyReleased();
     error CollateralAlreadyRecovered();
-    error UnlockNotReached();
+    error CallerNotEscrow();
 
     // ── EIP-712 typehash ────────────────────────────────────────────────
 
@@ -124,10 +124,10 @@ contract UnderwritingCollateralManager is ICollateralManager, EIP712, Reentrancy
             revert PositionAlreadyExists();
         }
 
-        // Store the position
+        // Store the position (safe = msg.sender, the escrow that locked collateral)
         positionBySettlementJobId[permit.settlementJobId] = Position({
             underwriter: permit.underwriter,
-            safe: permit.safe,
+            safe: msg.sender,
             user: permit.user,
             merchantExecutionWallet: permit.merchantExecutionWallet,
             lockedCollateralUsdc: permit.requiredCollateralUsdc,
@@ -179,6 +179,7 @@ contract UnderwritingCollateralManager is ICollateralManager, EIP712, Reentrancy
     function releaseCollateral(uint256 settlementJobId) external override nonReentrant {
         Position storage pos = positionBySettlementJobId[settlementJobId];
         if (pos.underwriter == address(0)) revert PositionNotFound();
+        if (msg.sender != pos.safe) revert CallerNotEscrow();
         if (pos.collateralReleased) revert CollateralAlreadyReleased();
         if (pos.collateralRecovered) revert CollateralAlreadyRecovered();
 
@@ -196,6 +197,7 @@ contract UnderwritingCollateralManager is ICollateralManager, EIP712, Reentrancy
     function claimTimeout(uint256 settlementJobId) external override nonReentrant {
         Position storage pos = positionBySettlementJobId[settlementJobId];
         if (pos.underwriter == address(0)) revert PositionNotFound();
+        if (msg.sender != pos.safe) revert CallerNotEscrow();
         if (pos.collateralRecovered) revert CollateralAlreadyRecovered();
         if (pos.collateralReleased) revert CollateralAlreadyReleased();
 
@@ -213,27 +215,42 @@ contract UnderwritingCollateralManager is ICollateralManager, EIP712, Reentrancy
     }
 
     /// @inheritdoc ICollateralManager
+    /// @dev slashSig verification is intentionally delegated to the upstream caller
+    ///      (the settlement coordinator / evaluator), which validates the slash
+    ///      attestation before invoking this function. Access control via pos.safe
+    ///      ensures only the authorized escrow can trigger a slash.
     function slash(SlashAttestation calldata attestation, bytes calldata /* slashSig */) external override nonReentrant {
         Position storage pos = positionBySettlementJobId[attestation.settlementJobId];
         if (pos.underwriter == address(0)) revert PositionNotFound();
+        if (msg.sender != pos.safe) revert CallerNotEscrow();
         if (pos.collateralRecovered) revert CollateralAlreadyRecovered();
         if (pos.collateralReleased) revert CollateralAlreadyReleased();
 
         UnderwriterRecipients memory recipients = recipientsByUnderwriter[pos.underwriter];
         if (recipients.recoveryRecipient == address(0)) revert RecipientsNotSet();
 
+        uint256 slashAmount = attestation.slashAmountUsdc;
+        if (slashAmount > pos.lockedCollateralUsdc) {
+            slashAmount = pos.lockedCollateralUsdc;
+        }
+
+        uint256 remainder = pos.lockedCollateralUsdc - slashAmount;
+
+        // Mark position as fully recovered
         pos.collateralRecovered = true;
+        pos.lockedCollateralUsdc = 0;
 
-        uint256 amount = attestation.slashAmountUsdc;
-        if (amount > pos.lockedCollateralUsdc) {
-            amount = pos.lockedCollateralUsdc;
+        // Send slashed amount to recovery recipient
+        if (slashAmount > 0) {
+            usdc.safeTransfer(recipients.recoveryRecipient, slashAmount);
         }
 
-        if (amount > 0) {
-            usdc.safeTransfer(recipients.recoveryRecipient, amount);
+        // Return any remainder to the escrow (partial slash)
+        if (remainder > 0) {
+            usdc.safeTransfer(msg.sender, remainder);
         }
 
-        emit CollateralSlashed(attestation.settlementJobId, recipients.recoveryRecipient, amount);
+        emit CollateralSlashed(attestation.settlementJobId, recipients.recoveryRecipient, slashAmount);
     }
 
     // ── internals ───────────────────────────────────────────────────────
