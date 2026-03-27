@@ -14,6 +14,18 @@
 - `requiredCollateralUsdc` becomes onchain recovery collateral for the underwriter, routing to the underwriter's recovery address on timeout/reject/slash, while any client compensation above that amount is handled offchain under the agreed `coverageCapUsdc`.
 - Each underwriter signer can self-manage the payout addresses used for premium collection and collateral recovery without relying on a central admin to reconfigure recipients per job.
 
+**Terminal Outcome Summary:** The end states should be explicit after this change:
+- `Success`: the provider submits before `expiredAt`, then either the client confirms inside `clientConfirmationWindow` through `confirmByClient(jobId, reason)` or the underwriter later completes through `completeBySig(...)`. On success, `job.budget` is paid to the provider, `fundedPrincipalUsdc` has already been released to `merchantExecutionWallet`, and `requiredCollateralUsdc` stays in the existing post-success release/dispute flow until it is either released back to the provider or later slashed.
+- `Reject`: the provider has submitted, the client does not confirm, and the underwriter ultimately rejects through `rejectBySig(...)`. On reject, `job.budget` returns to the client through ACP, underwriting premium stays with the underwriter, `fundedPrincipalUsdc` is not unwound onchain, and `requiredCollateralUsdc` is routed to the underwriter's `recoveryRecipient`.
+- `Timeout`: the provider fails to submit before `expiredAt`. On timeout, `job.budget` returns to the client through `claimRefund()`, underwriting premium stays with the underwriter because underwriting was already accepted, `fundedPrincipalUsdc` is not unwound onchain, and `requiredCollateralUsdc` is routed to the underwriter's `recoveryRecipient` for the offchain claims process.
+- `Slash`: the job has already reached a successful completion path, but a later success dispute resolves to `SlashCollateral`. In that case the onchain collateral is not paid to the client directly; instead `requiredCollateralUsdc` is routed to the underwriter's `recoveryRecipient`, and any client compensation is handled by the underwriter offchain under `coverageCapUsdc`.
+
+**Detailed Business Context:** This section is here so a reader understands the intended product semantics, not just the code changes.
+- `Success flow context`: when the provider submits before `expiredAt`, the job does not immediately settle. It first enters a global fixed `clientConfirmationWindow`. If the client actively confirms during that window, the happy-path success route is `confirmByClient(jobId, reason)`, which should complete the ACP job without waiting for the underwriter. If the client stays silent past that window, the underwriter becomes the fallback adjudicator and may call `completeBySig(...)`. In both success cases, `job.budget` goes to the provider, `fundedPrincipalUsdc` was already released earlier to `merchantExecutionWallet`, and `requiredCollateralUsdc` is not paid out at completion time. Instead, that collateral remains inside the existing release/dispute machinery and only returns to the provider if no later dispute is opened or the later dispute resolves to release.
+- `Reject flow context`: if the provider has already submitted but the client does not confirm, and the underwriter later resolves the case with `rejectBySig(...)`, the product meaning is that the delivery was not accepted. In that case, `job.budget` should unwind through ACP back to the client. The underwriting premium does not unwind because the underwriter already accepted and serviced the underwriting engagement. `fundedPrincipalUsdc` is also not rolled back onchain because it was intentionally advanced earlier to `merchantExecutionWallet`. The chain-level recovery asset is therefore the locked `requiredCollateralUsdc`, and that collateral should be sent to the underwriter's `recoveryRecipient`, with any client-facing make-whole process happening offchain under the policy.
+- `Timeout flow context`: `expiredAt` should be treated as the provider's submission deadline, not the underwriter's decision deadline. If the provider fails to submit before `expiredAt`, that is a true delivery timeout. The ACP-side `job.budget` should then refund to the client through `claimRefund()`. The underwriting premium still stays with the underwriter because underwriting was already accepted. `fundedPrincipalUsdc` is not automatically clawed back onchain. The locked `requiredCollateralUsdc` should instead move to the underwriter's `recoveryRecipient`, after which the underwriter handles the real client compensation process offchain up to `coverageCapUsdc`.
+- `Slash flow context`: slash only applies after the job has already reached a success path and then enters the later success-dispute stage. If that later dispute resolves to `SlashCollateral`, the protocol should not send the collateral directly to the client. The correct chain-level action is to move `requiredCollateralUsdc` to the underwriter's `recoveryRecipient`. The underwriting premium remains with the underwriter. Any actual customer payout above or beyond the recovered collateral remains an offchain underwriting obligation up to the agreed `coverageCapUsdc`.
+
 **Architecture:** Introduce a concrete `UnderwritingCollateralManager` that owns underwriter payout/recovery routing, permit verification, premium collection, principal release, collateral release, and collateral recovery. Extend the underwriting hook/evaluator/core flow so `expiredAt` acts as the provider submission deadline, timely submissions enter a global client confirmation window, and underwriter adjudication only starts after that window expires.
 
 **Tech Stack:** Solidity 0.8.24, Foundry, OpenZeppelin, Tenderly Virtual TestNet, Base Mainnet USDC.
@@ -379,7 +391,7 @@ Expected: PASS with the new expiry behavior enforced.
 
 ---
 
-### Task 5: Route Reject/Timeout/Slash Collateral To Underwriter Recovery And Simplify Success Release
+### Task 5: Route Reject/Timeout/Slash Collateral To Underwriter Recovery While Preserving Success Release/Dispute Flow
 
 **Files:**
 - Modify: `contracts/settlement/SettlementTypes.sol`
@@ -420,13 +432,29 @@ function testSuccessReleasesCollateralBackToProvider() public {
 
     assertEq(usdc.balanceOf(provider), providerBalanceBefore + requiredCollateralUsdc);
 }
+
+function testSlashRoutesCollateralToRecoveryRecipient() public {
+    _submitEvidenceOnTime(jobId);
+    vm.prank(client);
+    evaluator.confirmByClient(jobId, keccak256("accepted"));
+
+    vm.prank(provider);
+    coordinator.requestCollateralRelease(jobId);
+
+    vm.prank(client);
+    coordinator.openSuccessDispute(jobId, keccak256("success-dispute"));
+
+    evaluator.resolveSuccessDisputeBySig(disputeDecision, attestation, slashSig, underwriterDecisionSig);
+
+    assertEq(usdc.balanceOf(recoveryRecipient), requiredCollateralUsdc);
+}
 ```
 
 **Step 2: Run test to verify it fails**
 
 Run: `forge test --match-contract UnderwritingSettlementCoordinatorTest -vv`
 
-Expected: FAIL because the current coordinator expects a post-success dispute window and does not route reject recovery through the collateral manager.
+Expected: FAIL because the current coordinator still routes recovery and release according to the old assumptions and does not yet reflect the new recovery-recipient rules end-to-end.
 
 **Step 3: Implement the settlement state changes**
 
@@ -436,10 +464,13 @@ enum SettlementState {
     EscrowConfigured,
     CollateralLocked,
     PrincipalReleased,
+    SuccessPendingRelease,
+    DisputeOpen,
+    ReleaseApproved,
     SuccessSettled,
+    SuccessSlashed,
     RejectSettled,
-    ExpirySettled,
-    RecoverySettled
+    ExpirySettled
 }
 
 function settleExpiry(uint256 jobId) external {
@@ -471,8 +502,9 @@ function releaseCollateral(uint256 jobId) external {
 ```
 
 Implementation requirements:
-- Remove the old post-success dispute window from the active flow.
-- Treat client confirmation + underwriter adjudication as the only pre-completion dispute stage.
+- Preserve the post-success collateral release/dispute flow for successful jobs.
+- Treat client confirmation + underwriter adjudication as the pre-completion decision stage before a job becomes successful.
+- Route timeout, reject, and slash recovery through the underwriter's `recoveryRecipient`.
 - Add an escrow entrypoint such as `forfeitCollateralToRecovery()` if `claimTimeout()` is too narrow semantically for reject handling.
 
 **Step 4: Run focused tests**
