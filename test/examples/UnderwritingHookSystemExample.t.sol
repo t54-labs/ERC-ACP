@@ -7,18 +7,17 @@ import "../../contracts/examples/UnderwritingHookSystemExample.sol";
 import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../contracts/settlement/SettlementTypes.sol";
 import "../../contracts/settlement/UnderwritingSettlementCoordinator.sol";
+import "../../contracts/settlement/UnderwritingEvaluator.sol";
 import "../mocks/MockCollateralManager.sol";
 import "../mocks/MockERC20.sol";
 
 contract UnderwritingHookSystemExampleTest is Test {
     bytes32 internal constant COMPLETE_TYPEHASH =
         keccak256("CompleteDecision(uint256 jobId,bytes32 reason,uint64 deadline,uint256 nonce)");
-    bytes32 internal constant SUCCESS_DISPUTE_TYPEHASH = keccak256(
-        "SuccessDisputeDecision(uint256 jobId,bytes32 disputeHash,uint8 outcome,bytes32 reason,bytes32 slashAttestationHash,uint64 deadline,uint256 nonce)"
-    );
 
     uint256 internal constant PROVIDER_BUDGET = 40e6;
     uint256 internal constant UNDERWRITING_PREMIUM = 5e6;
+    uint64 internal constant CLIENT_CONFIRM_WINDOW = 1 hours;
 
     address internal treasury = makeAddr("treasury");
     address internal client = makeAddr("client");
@@ -39,7 +38,7 @@ contract UnderwritingHookSystemExampleTest is Test {
         usdc = new MockERC20("Mock USDC", "mUSDC");
         collateralManager = new MockCollateralManager(usdc);
         acp = new AgenticCommerceHooked(address(usdc), treasury);
-        example = new UnderwritingHookSystemExample(acp, collateralManager, 1 days);
+        example = new UnderwritingHookSystemExample(acp, collateralManager, CLIENT_CONFIRM_WINDOW);
 
         usdc.mint(client, 1_000_000e6);
         usdc.mint(provider, 1_000_000e6);
@@ -108,6 +107,8 @@ contract UnderwritingHookSystemExampleTest is Test {
         vm.prank(provider);
         acp.submit(jobId, evidence.bundleHash, encodedEvidence);
 
+        vm.warp(block.timestamp + uint256(CLIENT_CONFIRM_WINDOW) + 1);
+
         UnderwritingTypes.CompleteDecision memory decision = UnderwritingTypes.CompleteDecision({
             jobId: jobId,
             reason: keccak256("approved"),
@@ -132,7 +133,7 @@ contract UnderwritingHookSystemExampleTest is Test {
         assertTrue(collateralManager.releasePrincipalCalled());
     }
 
-    function testSingleStageDisputePathReleasesAfterSignedResolution() public {
+    function testClientConfirmationPathCompletesWithinWindow() public {
         example.registerUnderwriter(underwriter);
 
         address predictedEscrow = vm.computeCreateAddress(address(example.coordinator()), 1);
@@ -150,44 +151,83 @@ contract UnderwritingHookSystemExampleTest is Test {
         UnderwritingTypes.UnderwriteCommit memory commit = example.buildCommit(_commitInputs(0, false));
         UnderwritingHookSystemExample.PermitInputs memory permitInputs = _permitInputs(7, 0);
         _fundAndOrchestrateJob(jobId, commit, permitInputs, predictedEscrow);
+
+        UnderwritingTypes.SubmitEvidence memory evidence = _evidence(commit, "bundle");
+        bytes memory encodedEvidence = example.encodeSubmitEvidence(evidence);
+        vm.prank(provider);
+        acp.submit(jobId, evidence.bundleHash, encodedEvidence);
+
+        UnderwritingEvaluator eval = example.evaluator();
+        vm.prank(client);
+        eval.confirmByClient(jobId, keccak256("client-happy"));
+
+        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
+        assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Completed));
+        assertEq(
+            uint256(example.hook().jobSidecarState(jobId)),
+            uint256(UnderwritingTypes.SidecarState.SuccessPendingConfirmation)
+        );
+
+        example.coordinator().releaseCollateral(jobId);
+
+        assertEq(
+            uint256(example.coordinator().jobSettlementState(jobId)),
+            uint256(SettlementTypes.SettlementState.SuccessSettled)
+        );
+        assertEq(collateralManager.lastReleasedSettlementJobId(), jobId);
+    }
+
+    function testUnderwriterCompleteBySigRevertsDuringClientWindow() public {
+        example.registerUnderwriter(underwriter);
+
+        address predictedEscrow = vm.computeCreateAddress(address(example.coordinator()), 1);
+
+        vm.startPrank(client);
+        uint256 jobId = acp.createJob(
+            provider,
+            address(example.evaluator()),
+            block.timestamp + 1 days,
+            "underwriting root job",
+            address(example.hook())
+        );
+        vm.stopPrank();
+
+        UnderwritingTypes.UnderwriteCommit memory commit = example.buildCommit(_commitInputs(0, false));
+        _fundAndOrchestrateJob(jobId, commit, _permitInputs(7, 0), predictedEscrow);
+
+        UnderwritingTypes.SubmitEvidence memory evidence = _evidence(commit, "bundle");
+        bytes memory encodedEvidence = example.encodeSubmitEvidence(evidence);
+        vm.prank(provider);
+        acp.submit(jobId, evidence.bundleHash, encodedEvidence);
+
+        UnderwritingEvaluator eval = example.evaluator();
+        UnderwritingTypes.CompleteDecision memory decision = _completeDecision(jobId, "approved", 11);
+        bytes memory sig = _signCompleteDecision(decision);
+        vm.expectRevert(UnderwritingEvaluator.ClientConfirmationStillOpen.selector);
+        eval.completeBySig(decision, sig);
+    }
+
+    function testSingleStageReleaseAfterUnlockAt() public {
+        example.registerUnderwriter(underwriter);
+
+        address predictedEscrow = vm.computeCreateAddress(address(example.coordinator()), 1);
+
+        vm.startPrank(client);
+        uint256 jobId = acp.createJob(
+            provider,
+            address(example.evaluator()),
+            block.timestamp + 1 days,
+            "underwriting root job",
+            address(example.hook())
+        );
+        vm.stopPrank();
+
+        UnderwritingTypes.UnderwriteCommit memory commit = example.buildCommit(_commitInputs(0, false));
+        UnderwritingHookSystemExample.PermitInputs memory permitInputs = _permitInputs(7);
+        _fundAndOrchestrateJob(jobId, commit, permitInputs, predictedEscrow);
         _submitAndCompleteJob(jobId, commit, "bundle", "approved", 11);
 
-        vm.startPrank(provider);
-        example.coordinator().requestCollateralRelease(jobId);
-        vm.stopPrank();
-
-        assertEq(
-            uint256(example.coordinator().jobSettlementState(jobId)),
-            uint256(SettlementTypes.SettlementState.SuccessPendingRelease)
-        );
-
-        bytes32 disputeHash = keccak256("success-dispute");
-        vm.startPrank(client);
-        example.coordinator().openSuccessDispute(jobId, disputeHash);
-        vm.stopPrank();
-
-        assertEq(
-            uint256(example.coordinator().jobSettlementState(jobId)),
-            uint256(SettlementTypes.SettlementState.DisputeOpen)
-        );
-
-        SettlementTypes.SuccessDisputeDecision memory disputeDecision = _successDisputeDecision(
-            jobId,
-            disputeHash,
-            SettlementTypes.SuccessDisputeOutcome.ReleaseCollateral,
-            "release",
-            bytes32(0),
-            17
-        );
-
-        example.evaluator().resolveSuccessDisputeBySig(
-            disputeDecision, _emptySlashAttestation(), bytes(""), _signSuccessDisputeDecision(disputeDecision)
-        );
-
-        assertEq(
-            uint256(example.coordinator().jobSettlementState(jobId)),
-            uint256(SettlementTypes.SettlementState.ReleaseApproved)
-        );
+        vm.warp(block.timestamp + uint256(permitInputs.unlockIn) + 1);
 
         uint256 providerBalanceBefore = usdc.balanceOf(provider);
         example.coordinator().releaseCollateral(jobId);
@@ -258,10 +298,6 @@ contract UnderwritingHookSystemExampleTest is Test {
         assertFalse(example.hook().isAwaitingClose(rootJobId));
         assertEq(example.hook().getActiveCloseJobId(rootJobId), 0);
 
-        vm.startPrank(provider);
-        example.coordinator().requestCollateralRelease(closeJobId);
-        vm.stopPrank();
-
         vm.warp(block.timestamp + uint256(closePermitInputs.unlockIn) + 1);
 
         uint256 providerBalanceBefore = usdc.balanceOf(provider);
@@ -310,9 +346,8 @@ contract UnderwritingHookSystemExampleTest is Test {
 
         UnderwritingSettlementCoordinator coordinator = example.coordinator();
 
-        vm.prank(provider);
         vm.expectRevert(UnderwritingSettlementCoordinator.InvalidState.selector);
-        coordinator.requestCollateralRelease(rootJobId);
+        coordinator.releaseCollateral(rootJobId);
 
         assertEq(
             uint256(example.coordinator().jobSettlementState(rootJobId)),
@@ -322,83 +357,6 @@ contract UnderwritingHookSystemExampleTest is Test {
             uint256(example.coordinator().jobSettlementState(closeJobId)),
             uint256(SettlementTypes.SettlementState.None)
         );
-    }
-
-    function testTwoStageDisputePathCloseJobSlashUsesParentSettlement() public {
-        example.registerUnderwriter(underwriter);
-
-        address predictedEscrow = vm.computeCreateAddress(address(example.coordinator()), 1);
-
-        vm.startPrank(client);
-        uint256 rootJobId = acp.createJob(
-            provider,
-            address(example.evaluator()),
-            block.timestamp + 1 days,
-            "underwriting root job",
-            address(example.hook())
-        );
-        vm.stopPrank();
-
-        UnderwritingTypes.UnderwriteCommit memory rootCommit = example.buildCommit(_commitInputs(0, true));
-        _fundAndOrchestrateJob(rootJobId, rootCommit, _permitInputs(7), predictedEscrow);
-        _submitAndCompleteJob(rootJobId, rootCommit, "root bundle", "root approved", 11);
-
-        vm.startPrank(client);
-        uint256 closeJobId = acp.createJob(
-            provider,
-            address(example.evaluator()),
-            block.timestamp + 2 days,
-            "underwriting close job",
-            address(example.hook())
-        );
-        vm.stopPrank();
-
-        UnderwritingTypes.UnderwriteCommit memory closeCommit = example.buildCommit(_commitInputs(rootJobId, false));
-        _fundAndOrchestrateJob(closeJobId, closeCommit, _permitInputs(8), predictedEscrow);
-        _submitAndCompleteJob(closeJobId, closeCommit, "close bundle", "close approved", 12);
-
-        vm.startPrank(provider);
-        example.coordinator().requestCollateralRelease(closeJobId);
-        vm.stopPrank();
-
-        bytes32 disputeHash = keccak256("close-dispute");
-        vm.startPrank(client);
-        example.coordinator().openSuccessDispute(closeJobId, disputeHash);
-        vm.stopPrank();
-
-        ICollateralManager.SlashAttestation memory attestation = ICollateralManager.SlashAttestation({
-            settlementJobId: rootJobId,
-            safe: predictedEscrow,
-            user: client,
-            merchant: provider,
-            slashAmountUsdc: 25e6,
-            reasonCode: keccak256("slash"),
-            validUntil: uint64(block.timestamp + 1 days),
-            nonce: 21
-        });
-        SettlementTypes.SuccessDisputeDecision memory disputeDecision = _successDisputeDecision(
-            closeJobId,
-            disputeHash,
-            SettlementTypes.SuccessDisputeOutcome.SlashCollateral,
-            "slash",
-            keccak256(abi.encode(attestation)),
-            22
-        );
-
-        example.evaluator().resolveSuccessDisputeBySig(
-            disputeDecision, attestation, bytes("slash-sig"), _signSuccessDisputeDecision(disputeDecision)
-        );
-
-        assertEq(
-            uint256(example.coordinator().jobSettlementState(closeJobId)),
-            uint256(SettlementTypes.SettlementState.SuccessSlashed)
-        );
-        assertTrue(collateralManager.slashCalled());
-        assertEq(example.coordinator().settlementEscrow(closeJobId), predictedEscrow);
-
-        (uint256 settlementJobId, address safe,,,,,,) = collateralManager.lastSlashAttestation();
-        assertEq(settlementJobId, rootJobId);
-        assertEq(safe, predictedEscrow);
     }
 
     function _commitInputs(uint256 parentJobId, bool allowCloseJob)
@@ -481,6 +439,8 @@ contract UnderwritingHookSystemExampleTest is Test {
         vm.prank(provider);
         acp.submit(jobId, evidence.bundleHash, encodedEvidence);
 
+        vm.warp(block.timestamp + uint256(CLIENT_CONFIRM_WINDOW) + 1);
+
         UnderwritingTypes.CompleteDecision memory decision = _completeDecision(jobId, reasonLabel, nonce);
         example.evaluator().completeBySig(decision, _signCompleteDecision(decision));
     }
@@ -511,71 +471,12 @@ contract UnderwritingHookSystemExampleTest is Test {
         });
     }
 
-    function _successDisputeDecision(
-        uint256 jobId,
-        bytes32 disputeHash,
-        SettlementTypes.SuccessDisputeOutcome outcome,
-        string memory reasonLabel,
-        bytes32 slashAttestationHash,
-        uint256 nonce
-    ) internal view returns (SettlementTypes.SuccessDisputeDecision memory) {
-        return SettlementTypes.SuccessDisputeDecision({
-            jobId: jobId,
-            disputeHash: disputeHash,
-            outcome: outcome,
-            reason: keccak256(bytes(reasonLabel)),
-            slashAttestationHash: slashAttestationHash,
-            deadline: uint64(block.timestamp + 1 days),
-            nonce: nonce
-        });
-    }
-
-    function _emptySlashAttestation() internal pure returns (ICollateralManager.SlashAttestation memory) {
-        return ICollateralManager.SlashAttestation({
-            settlementJobId: 0,
-            safe: address(0),
-            user: address(0),
-            merchant: address(0),
-            slashAmountUsdc: 0,
-            reasonCode: bytes32(0),
-            validUntil: 0,
-            nonce: 0
-        });
-    }
-
     function _signCompleteDecision(UnderwritingTypes.CompleteDecision memory decision) internal view returns (bytes memory) {
         bytes32 digest = keccak256(
             abi.encodePacked(
                 "\x19\x01",
                 _domainSeparator(),
                 keccak256(abi.encode(COMPLETE_TYPEHASH, decision.jobId, decision.reason, decision.deadline, decision.nonce))
-            )
-        );
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(underwriterPk, digest);
-        return abi.encodePacked(r, s, v);
-    }
-
-    function _signSuccessDisputeDecision(SettlementTypes.SuccessDisputeDecision memory decision)
-        internal
-        view
-        returns (bytes memory)
-    {
-        bytes32 digest = keccak256(
-            abi.encodePacked(
-                "\x19\x01",
-                _domainSeparator(),
-                keccak256(
-                    abi.encode(
-                        SUCCESS_DISPUTE_TYPEHASH,
-                        decision.jobId,
-                        decision.disputeHash,
-                        uint8(decision.outcome),
-                        decision.reason,
-                        decision.slashAttestationHash,
-                        decision.deadline,
-                        decision.nonce
-                    )
-                )
             )
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(underwriterPk, digest);

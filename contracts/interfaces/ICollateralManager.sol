@@ -44,7 +44,7 @@ interface ICollateralManager {
 
     /// @notice Locks provider collateral for a settlement flow.
     /// @param permit The settlement permit being exercised.
-    /// @param claimant The account authorized to claim timeout outcomes.
+    /// @param claimant Recorded for traceability; timeout and reject recovery routes to the underwriter recovery recipient.
     /// @param unlockAt The earliest timestamp collateral may be released.
     /// @param permitSig The signature authorizing `permit`.
     function lockCollateral(

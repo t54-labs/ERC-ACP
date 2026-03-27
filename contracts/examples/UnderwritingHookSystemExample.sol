@@ -65,8 +65,8 @@ contract UnderwritingHookSystemExample {
     /// @notice Deploys and wires a full underwriting hook stack for the supplied ACP kernel.
     /// @param acp_ The hooked ACP contract to integrate with.
     /// @param collateralManager_ The collateral manager used by settlement escrows.
-    /// @param disputeWindowSeconds_ The duration of the post-success dispute window.
-    constructor(AgenticCommerceHooked acp_, ICollateralManager collateralManager_, uint64 disputeWindowSeconds_) {
+    /// @param clientConfirmationWindowSeconds_ Duration after submission during which only the client may confirm.
+    constructor(AgenticCommerceHooked acp_, ICollateralManager collateralManager_, uint64 clientConfirmationWindowSeconds_) {
         if (address(acp_) == address(0) || address(collateralManager_) == address(0)) revert ZeroAddress();
 
         acp = acp_;
@@ -75,9 +75,9 @@ contract UnderwritingHookSystemExample {
 
         hook = new UnderwritingHook(address(acp_), address(this));
         coordinator = new UnderwritingSettlementCoordinator(
-            IAgenticCommerceKernel(address(acp_)), hook, collateralManager_, disputeWindowSeconds_
+            IAgenticCommerceKernel(address(acp_)), hook, collateralManager_
         );
-        evaluator = new UnderwritingEvaluator(IAgenticCommerceKernel(address(acp_)), hook, address(coordinator), 0);
+        evaluator = new UnderwritingEvaluator(IAgenticCommerceKernel(address(acp_)), hook, clientConfirmationWindowSeconds_);
 
         hook.setWiring(address(evaluator), address(coordinator));
 

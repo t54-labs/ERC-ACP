@@ -21,7 +21,6 @@ interface IUnderwritingWiringTarget {
 
 interface IUnderwritingSettlementCoordinatorTarget is IUnderwritingWiringTarget {
     function collateralManager() external view returns (address);
-    function disputeWindowSeconds() external view returns (uint64);
 }
 
 /**
@@ -217,10 +216,6 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
         try coordinatorTarget.collateralManager() returns (address targetCollateralManager) {
             if (targetCollateralManager == address(0)) revert InvalidWiring();
         } catch {
-            revert InvalidWiring();
-        }
-
-        try coordinatorTarget.disputeWindowSeconds() returns (uint64) {} catch {
             revert InvalidWiring();
         }
     }

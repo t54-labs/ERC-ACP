@@ -3,10 +3,8 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "../../contracts/interfaces/IAgenticCommerceKernel.sol";
-import "../../contracts/interfaces/ICollateralManager.sol";
 import "../../contracts/hooks/underwriting/IUnderwritingHookView.sol";
 import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
-import "../../contracts/settlement/SettlementTypes.sol";
 import "../../contracts/settlement/UnderwritingEvaluator.sol";
 
 contract MockSettlementEvaluatorACP is IAgenticCommerceKernel {
@@ -122,28 +120,11 @@ contract MockSettlementEvaluatorHook is IUnderwritingHookView {
     }
 }
 
-contract MockSuccessDisputeCoordinator {
-    bool public applyCalled;
-    uint256 public lastJobId;
-
-    function applySuccessDisputeDecision(
-        SettlementTypes.SuccessDisputeDecision calldata decision,
-        ICollateralManager.SlashAttestation calldata,
-        bytes calldata
-    ) external {
-        applyCalled = true;
-        lastJobId = decision.jobId;
-    }
-}
-
 contract UnderwritingEvaluatorTest is Test {
     bytes32 internal constant COMPLETE_TYPEHASH =
         keccak256("CompleteDecision(uint256 jobId,bytes32 reason,uint64 deadline,uint256 nonce)");
     bytes32 internal constant REJECT_TYPEHASH =
         keccak256("RejectDecision(uint256 jobId,bytes32 reason,uint64 deadline,uint256 nonce)");
-    bytes32 internal constant SUCCESS_DISPUTE_TYPEHASH = keccak256(
-        "SuccessDisputeDecision(uint256 jobId,bytes32 disputeHash,uint8 outcome,bytes32 reason,bytes32 slashAttestationHash,uint64 deadline,uint256 nonce)"
-    );
 
     uint256 internal rootUnderwriterPk;
     address internal rootUnderwriter;
@@ -154,7 +135,6 @@ contract UnderwritingEvaluatorTest is Test {
 
     MockSettlementEvaluatorACP internal acp;
     MockSettlementEvaluatorHook internal hook;
-    MockSuccessDisputeCoordinator internal coordinator;
     UnderwritingEvaluator internal evaluator;
 
     function setUp() public {
@@ -164,8 +144,7 @@ contract UnderwritingEvaluatorTest is Test {
 
         acp = new MockSettlementEvaluatorACP(address(0xBEEF));
         hook = new MockSettlementEvaluatorHook();
-        coordinator = new MockSuccessDisputeCoordinator();
-        evaluator = new UnderwritingEvaluator(acp, hook, address(coordinator), 1 hours);
+        evaluator = new UnderwritingEvaluator(acp, hook, 1 hours);
     }
 
     function testCompleteBySigRejectsRootOpenAndCloseBeforeSubmit() public {
@@ -234,30 +213,6 @@ contract UnderwritingEvaluatorTest is Test {
 
         vm.expectRevert(UnderwritingEvaluator.WrongDecisionState.selector);
         evaluator.rejectBySig(decision, _signRejectDecision(decision, rootUnderwriterPk));
-    }
-
-    function testResolveSuccessDisputeBySigRejectsBeforeCompleted() public {
-        _seedJob(21, IAgenticCommerceKernel.JobStatus.Submitted, rootUnderwriter);
-
-        SettlementTypes.SuccessDisputeDecision memory decision = _successDisputeDecision(21);
-
-        vm.expectRevert(UnderwritingEvaluator.WrongDecisionStatus.selector);
-        evaluator.resolveSuccessDisputeBySig(
-            decision, _emptySlashAttestation(), bytes(""), _signSuccessDisputeDecision(decision, rootUnderwriterPk)
-        );
-    }
-
-    function testResolveSuccessDisputeBySigCallsCoordinatorAfterCompleted() public {
-        _seedJob(22, IAgenticCommerceKernel.JobStatus.Completed, rootUnderwriter);
-
-        SettlementTypes.SuccessDisputeDecision memory decision = _successDisputeDecision(22);
-
-        evaluator.resolveSuccessDisputeBySig(
-            decision, _emptySlashAttestation(), bytes(""), _signSuccessDisputeDecision(decision, rootUnderwriterPk)
-        );
-
-        assertTrue(coordinator.applyCalled());
-        assertEq(coordinator.lastJobId(), 22);
     }
 
     function testClientCanConfirmWithinConfirmationWindow() public {
@@ -348,31 +303,6 @@ contract UnderwritingEvaluatorTest is Test {
         });
     }
 
-    function _successDisputeDecision(uint256 jobId) internal view returns (SettlementTypes.SuccessDisputeDecision memory) {
-        return SettlementTypes.SuccessDisputeDecision({
-            jobId: jobId,
-            disputeHash: keccak256("dispute"),
-            outcome: SettlementTypes.SuccessDisputeOutcome.ReleaseCollateral,
-            reason: keccak256("release"),
-            slashAttestationHash: bytes32(0),
-            deadline: uint64(block.timestamp + 1 days),
-            nonce: jobId
-        });
-    }
-
-    function _emptySlashAttestation() internal pure returns (ICollateralManager.SlashAttestation memory) {
-        return ICollateralManager.SlashAttestation({
-            settlementJobId: 0,
-            safe: address(0),
-            user: address(0),
-            merchant: address(0),
-            slashAmountUsdc: 0,
-            reasonCode: bytes32(0),
-            validUntil: 0,
-            nonce: 0
-        });
-    }
-
     function _signCompleteDecision(UnderwritingTypes.CompleteDecision memory decision, uint256 signerPk)
         internal
         view
@@ -399,33 +329,6 @@ contract UnderwritingEvaluatorTest is Test {
                 "\x19\x01",
                 _domainSeparator(),
                 keccak256(abi.encode(REJECT_TYPEHASH, decision.jobId, decision.reason, decision.deadline, decision.nonce))
-            )
-        );
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
-        return abi.encodePacked(r, s, v);
-    }
-
-    function _signSuccessDisputeDecision(SettlementTypes.SuccessDisputeDecision memory decision, uint256 signerPk)
-        internal
-        view
-        returns (bytes memory)
-    {
-        bytes32 digest = keccak256(
-            abi.encodePacked(
-                "\x19\x01",
-                _domainSeparator(),
-                keccak256(
-                    abi.encode(
-                        SUCCESS_DISPUTE_TYPEHASH,
-                        decision.jobId,
-                        decision.disputeHash,
-                        uint8(decision.outcome),
-                        decision.reason,
-                        decision.slashAttestationHash,
-                        decision.deadline,
-                        decision.nonce
-                    )
-                )
             )
         );
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);

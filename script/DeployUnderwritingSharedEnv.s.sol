@@ -39,7 +39,6 @@ contract DeployUnderwritingSharedEnv is Script {
         address usdc = vm.envAddress("BASE_USDC");
         address treasury = vm.envAddress("ACP_TREASURY");
         uint64 clientConfirmationWindow = uint64(vm.envUint("CLIENT_CONFIRMATION_WINDOW"));
-        uint64 disputeWindowSeconds = 0; // disabled for shared-env iteration
 
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
 
@@ -58,15 +57,13 @@ contract DeployUnderwritingSharedEnv is Script {
         UnderwritingSettlementCoordinator coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp)),
             hook,
-            manager,
-            disputeWindowSeconds
+            manager
         );
 
         // 5. Evaluator
         UnderwritingEvaluator evaluator = new UnderwritingEvaluator(
             IAgenticCommerceKernel(address(acp)),
             IUnderwritingHookView(address(hook)),
-            address(coordinator),
             clientConfirmationWindow
         );
 

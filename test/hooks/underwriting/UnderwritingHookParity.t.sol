@@ -14,7 +14,6 @@ contract MockHookParitySettlementCoordinator {
     AgenticCommerceHooked public immutable acp;
     UnderwritingHook public immutable hook;
     address public immutable collateralManager;
-    uint64 public immutable disputeWindowSeconds = 1 days;
 
     constructor(address acpContract_, address hook_) {
         acp = AgenticCommerceHooked(acpContract_);

@@ -46,7 +46,6 @@ contract UnderwritingSharedEnvFlowTest is Test {
     // ── timing ──────────────────────────────────────────────────────────
 
     uint64 internal constant CLIENT_CONFIRM_WINDOW = 1 hours;
-    uint64 internal constant DISPUTE_WINDOW = 1 days;
 
     // ── actors ──────────────────────────────────────────────────────────
 
@@ -85,13 +84,11 @@ contract UnderwritingSharedEnvFlowTest is Test {
         coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp)),
             hook,
-            collateralManager,
-            DISPUTE_WINDOW
+            collateralManager
         );
         evaluator = new UnderwritingEvaluator(
             IAgenticCommerceKernel(address(acp)),
             hook,
-            address(coordinator),
             CLIENT_CONFIRM_WINDOW
         );
         hook.setWiring(address(evaluator), address(coordinator));
@@ -182,14 +179,7 @@ contract UnderwritingSharedEnvFlowTest is Test {
             "wrong sidecar state"
         );
 
-        // ── Provider requests collateral release ──
-        vm.prank(provider);
-        coordinator.requestCollateralRelease(jobId);
-
-        // Warp past dispute window
-        vm.warp(block.timestamp + uint256(DISPUTE_WINDOW) + 1);
-
-        // ── Release collateral ──
+        // ── Release collateral (unlockAt from permit is 0; no dispute window) ──
         uint256 providerBefore = usdc.balanceOf(provider);
         coordinator.releaseCollateral(jobId);
 
