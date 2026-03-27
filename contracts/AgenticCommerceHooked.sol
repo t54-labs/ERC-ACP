@@ -59,6 +59,7 @@ contract AgenticCommerceHooked is AccessControl, ReentrancyGuard {
     mapping(uint256 => JobKind) internal jobKindByJobId;
     mapping(uint256 => uint256) internal parentJobIdByCloseJobId;
     mapping(uint256 => uint256) internal closeJobIdByParentJobId;
+    mapping(uint256 => uint64) internal submittedAtByJobId;
     uint256 public jobCounter;
 
     event JobCreated(uint256 indexed jobId, address indexed client, address indexed provider, address evaluator, uint256 expiredAt, address hook);
@@ -284,6 +285,7 @@ contract AgenticCommerceHooked is AccessControl, ReentrancyGuard {
         bytes memory data = abi.encode(deliverable, optParams);
         _beforeHook(job.hook, jobId, msg.sig, data);
         job.status = JobStatus.Submitted;
+        submittedAtByJobId[jobId] = uint64(block.timestamp);
         emit JobSubmitted(jobId, msg.sender, deliverable);
         _afterHook(job.hook, jobId, msg.sig, data);
     }
@@ -345,12 +347,20 @@ contract AgenticCommerceHooked is AccessControl, ReentrancyGuard {
     }
 
     /// @dev Deliberately NOT hookable — safety mechanism so refunds cannot be blocked.
+    ///      However, hooked jobs that were submitted on time (before expiredAt) are
+    ///      protected from refund so they can proceed through the client confirmation /
+    ///      underwriter adjudication flow.
     /// @param jobId The job whose refund is being claimed.
     function claimRefund(uint256 jobId) external nonReentrant {
         Job storage job = jobs[jobId];
         if (job.id == 0) revert InvalidJob();
         if (job.status != JobStatus.Funded && job.status != JobStatus.Submitted) revert WrongStatus();
         if (block.timestamp < job.expiredAt) revert WrongStatus();
+        // Block refund for hooked jobs that were submitted on time.
+        uint64 submittedAt = submittedAtByJobId[jobId];
+        if (job.hook != address(0) && submittedAt != 0 && submittedAt <= job.expiredAt) {
+            revert WrongStatus();
+        }
         job.status = JobStatus.Expired;
         if (job.budget > 0) {
             paymentToken.safeTransfer(job.client, job.budget);
