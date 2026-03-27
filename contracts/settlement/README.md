@@ -38,7 +38,7 @@ The client calls `openSuccessDispute(jobId, reasonCode)` before `unlockAt` (→ 
 
 ### Timeout and reject paths
 
-Both route through `claimTimeout()` on the collateral manager, which sends the full locked collateral to the underwriter's configured `recoveryRecipient`.
+Reject settlements route through `claimTimeout()` on the collateral manager, which sends the full locked collateral to the underwriter's configured `recoveryRecipient`. Expiry settlements do the same for protected jobs with locked collateral, while close-job expiries and `FeeEscrowed` expiries may settle directly to `ExpirySettled` without a collateral-manager timeout claim.
 
 ## Settlement State Machine
 
@@ -65,7 +65,7 @@ Close jobs start at `None` and share the parent's settlement identity and escrow
 
 ## Deployment
 
-Use `script/DeployUnderwritingSharedEnv.s.sol` to deploy all five contracts and wire them in a single transaction. After deployment:
+Use `script/DeployUnderwritingSharedEnv.s.sol` to deploy all five contracts and wire them in a single broadcast run. After deployment:
 
 1. **Register underwriters** via `script/RegisterUnderwriter.s.sol` (hook admin only).
 2. **Configure recipients** via `script/ConfigureUnderwriterRecipients.s.sol` (called by the underwriter).
