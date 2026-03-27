@@ -3,30 +3,65 @@
 The underwriting migration splits responsibilities across two layers:
 
 - `hooks/underwriting/` is the workflow authority. It admits commits, gates fund/submit transitions, checks evidence, and preserves parent/close job linkage.
-- `settlement/UnderwritingSettlementCoordinator.sol` owns premium, collateral, principal, expiry, and dispute orchestration.
+- `settlement/UnderwritingSettlementCoordinator.sol` owns collateral release, expiry, reject, and post-success dispute orchestration.
 - `settlement/UnderwritingEvaluator.sol` keeps canonical complete/reject timing with client confirmation windows.
-- `settlement/UnderwritingSettlementEscrow.sol` is the token-moving adapter created on demand when funding is orchestrated.
+- `settlement/UnderwritingCollateralManager.sol` owns underwriter payout/recovery routing, permit verification, premium collection, principal release, collateral lock/release, and slashing.
+- `settlement/UnderwritingSettlementEscrow.sol` is the per-settlement token-moving adapter created on demand when funding is orchestrated.
 
 ## Typical Flow
 
-1. Deploy `UnderwritingHook`, `UnderwritingSettlementCoordinator`, and `UnderwritingEvaluator`.
+1. Deploy all five contracts: `AgenticCommerceHooked`, `UnderwritingCollateralManager`, `UnderwritingHook`, `UnderwritingSettlementCoordinator`, `UnderwritingEvaluator`.
 2. Wire the hook to the evaluator and coordinator once via `setWiring(...)`.
-3. Create an ACP job with `hook = UnderwritingHook` and `evaluator = UnderwritingEvaluator`.
-4. Commit underwriting terms during `setBudget(...)`.
-5. Fund the ACP job, then call `orchestrateFunding(...)` with the matching `UnderwritePermit`.
-6. Submit evidence through ACP.
-7. Finalize with the evaluator's underwriter signature path.
+3. Register underwriters via `registerUnderwriter(...)` and set their recipients via `setUnderwriterRecipients(...)`.
+4. Create an ACP job with `hook = UnderwritingHook` and `evaluator = UnderwritingEvaluator`.
+5. Commit underwriting terms during `setBudget(...)`.
+6. Fund the ACP job, then call `orchestrateFunding(...)` with the matching `UnderwritePermit`. Premium is paid immediately to the underwriter's `premiumRecipient`; collateral is locked in the collateral manager; funded principal is released to the merchant execution wallet.
+7. Provider submits evidence through ACP before `expiredAt`.
+8. Client confirms inside `clientConfirmationWindowSeconds`, or the underwriter adjudicates after the window with `completeBySig(...)` or `rejectBySig(...)`.
 
 ## Collateral Routing
 
-| Outcome | Collateral destination | Coordinator method |
-|---------|------------------------|--------------------|
-| **Success** (provider completes) | Returned to provider via escrow | `releaseCollateral()` |
+| Outcome | Collateral destination | Coordinator method(s) |
+|---------|------------------------|-----------------------|
+| **Success** (no dispute) | Returned to provider via escrow | `requestCollateralRelease()` → `releaseCollateral()` |
+| **Success** (dispute slash) | Sent to underwriter's recovery recipient | `requestCollateralRelease()` → `openSuccessDispute()` → `applySuccessDisputeSlash()` |
 | **Timeout** (job expires) | Sent to underwriter's recovery recipient | `settleExpiry()` |
 | **Reject** (underwriter rejects) | Sent to underwriter's recovery recipient | `finalizeRejectedJob()` |
-| **Slash** (post-success dispute) | Sent to underwriter's recovery recipient | `applySuccessDisputeSlash()` |
 
-Both timeout and reject paths route through `claimTimeout()` on the collateral manager, which sends locked collateral to the underwriter's configured `recoveryRecipient`. The slash path requires an explicit dispute ceremony: the provider first calls `requestCollateralRelease()` (→ `SuccessPendingRelease`), then the client may call `openSuccessDispute()` before `unlockAt` (→ `DisputeOpen`), and finally the underwriter resolves the dispute via `applySuccessDisputeSlash()` (→ `RecoverySettled`). The slash itself routes through `slash()` on the collateral manager via the escrow's `slashCollateral()`, sending the slashed portion to the recovery recipient and any remainder back to the provider.
+### Success release path
+
+After a job completes, collateral does not release automatically. The provider calls `requestCollateralRelease()` to signal intent (→ `SuccessPendingRelease`). If `unlockAt` is 0, `releaseCollateral()` can proceed immediately. If `unlockAt` is in the future, the client has until that timestamp to open a dispute.
+
+### Post-success dispute path
+
+The client calls `openSuccessDispute(jobId, reasonCode)` before `unlockAt` (→ `DisputeOpen`), blocking release. The underwriter then resolves the dispute by signing a `SlashAttestation` and calling `applySuccessDisputeSlash()` (→ `RecoverySettled`). The collateral manager sends the slashed portion to the underwriter's `recoveryRecipient` and any remainder back to the provider via the escrow.
+
+### Timeout and reject paths
+
+Both route through `claimTimeout()` on the collateral manager, which sends the full locked collateral to the underwriter's configured `recoveryRecipient`.
+
+## Settlement State Machine
+
+```
+orchestrateFunding  →  CollateralLocked / PrincipalReleased
+                                 │
+                    requestCollateralRelease
+                                 │
+                                 ▼
+                        SuccessPendingRelease
+                           │            │
+            (past unlockAt) │            │ openSuccessDispute (before unlockAt)
+                            │            │
+                            ▼            ▼
+                     SuccessSettled   DisputeOpen
+                                         │
+                          applySuccessDisputeSlash
+                                         │
+                                         ▼
+                                   RecoverySettled
+```
+
+Close jobs start at `None` and share the parent's settlement identity and escrow.
 
 ## Deployment
 
