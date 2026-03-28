@@ -177,13 +177,17 @@ contract UnderwritingEvaluatorUpgradeableTest is Test {
         evaluator.upgradeToAndCall(address(upgradedImplementation), bytes(""));
     }
 
-    function testAuthorizedUpgradeSucceeds() public {
+    function testAuthorizedUpgradePreservesStoredState() public {
         UnderwritingEvaluatorV2Mock upgradedImplementation = new UnderwritingEvaluatorV2Mock();
 
         vm.prank(admin);
         evaluator.upgradeToAndCall(address(upgradedImplementation), bytes(""));
 
         assertEq(UnderwritingEvaluatorV2Mock(address(evaluator)).version(), 2);
+        assertEq(evaluator.acp(), address(acp));
+        assertEq(evaluator.hook(), address(hook));
+        assertEq(evaluator.admin(), admin);
+        assertEq(evaluator.clientConfirmationWindowSeconds(), 1 hours);
     }
 
     function testProxyEvaluatorCompleteBySigPreservesDecisionFlow() public {
