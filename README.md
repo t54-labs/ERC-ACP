@@ -5,13 +5,15 @@
 ## Contents
 
 - **[ERC-agentic-commerce.md](./ERC-agentic-commerce.md)** — Specification: Open → Funded → Submitted → Completed | Rejected | Expired; only the evaluator can complete a job.
-- **contracts/** — Reference implementations for the ACP core, canonical underwriting hook integration, and settlement-side economic modules. See [contracts/README.md](./contracts/README.md).
+- **contracts/** — Reference implementations for the ACP migration, canonical underwriting hook integration, and settlement-side economic modules. See [contracts/README.md](./contracts/README.md).
 
 ## Quick start
 
 1. Read the spec: [ERC-agentic-commerce.md](./ERC-agentic-commerce.md).
-2. Use or extend the reference implementation: [contracts/AgenticCommerce.sol](./contracts/AgenticCommerce.sol).
-3. For underwriting workflows, treat `contracts/hooks/underwriting/` as the workflow authority and `contracts/settlement/` as the premium/collateral/principal/dispute layer.
+2. Bootstrap dependencies from a fresh checkout: `./script/bootstrap-foundry-deps.sh`.
+3. For new ACP core work, use the canonical submodule-backed source in `contracts/acp/contracts/` via `@acp/...` imports.
+4. Treat `contracts/AgenticCommerce.sol` and `contracts/AgenticCommerceHooked.sol` as temporary migration-era copies, not the source of truth for new ACP changes.
+5. For underwriting workflows, treat `contracts/hooks/underwriting/` as the workflow authority and `contracts/settlement/` as the premium/collateral/principal/dispute layer.
 
 ## Shared-Environment Deployment
 
