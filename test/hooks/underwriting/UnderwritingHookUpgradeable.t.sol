@@ -117,13 +117,19 @@ contract UnderwritingHookUpgradeableTest is Test {
         hook.upgradeToAndCall(address(upgradedImplementation), bytes(""));
     }
 
-    function testAuthorizedUpgradeSucceeds() public {
+    function testAuthorizedUpgradePreservesStoredState() public {
         UnderwritingHookV2Mock upgradedImplementation = new UnderwritingHookV2Mock();
 
         vm.prank(admin);
         hook.upgradeToAndCall(address(upgradedImplementation), bytes(""));
 
         assertEq(UnderwritingHookV2Mock(address(hook)).version(), 2);
+        assertEq(hook.admin(), admin);
+        assertEq(hook.acp(), address(acp));
+        assertEq(hook.evaluator(), address(evaluator));
+        assertEq(hook.coordinator(), address(coordinator));
+        assertEq(hook.allowedSettlementToken(), address(usdc));
+        assertTrue(hook.registeredUnderwriters(underwriter));
     }
 
     function testProxyHookMustBeWhitelistedBeforeHookedJobsCanBeCreated() public {
