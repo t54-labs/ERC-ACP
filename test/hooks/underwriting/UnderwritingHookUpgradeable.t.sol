@@ -71,6 +71,7 @@ contract UnderwritingHookUpgradeableTest is Test {
     address internal underwriter = makeAddr("underwriter");
 
     MockERC20 internal usdc;
+    MockERC20 internal dai;
     AgenticCommerce internal acp;
     IUpgradeableUnderwritingHook internal hook;
     MockUpgradeableHookEvaluator internal evaluator;
@@ -78,6 +79,7 @@ contract UnderwritingHookUpgradeableTest is Test {
 
     function setUp() public {
         usdc = new MockERC20("Mock USDC", "mUSDC");
+        dai = new MockERC20("Mock DAI", "mDAI");
         acp = _deployAcp(treasury);
         hook = _deployHookProxy(admin);
         evaluator = new MockUpgradeableHookEvaluator(address(acp), address(hook));
@@ -90,8 +92,11 @@ contract UnderwritingHookUpgradeableTest is Test {
         vm.stopPrank();
 
         usdc.mint(client, 1_000_000e6);
+        dai.mint(client, 1_000_000e6);
         vm.prank(client);
         usdc.approve(address(acp), type(uint256).max);
+        vm.prank(client);
+        dai.approve(address(acp), type(uint256).max);
     }
 
     function testProxyInitializeSetsStorageAndAdminControls() public view {
@@ -178,6 +183,24 @@ contract UnderwritingHookUpgradeableTest is Test {
             uint256(hook.jobSidecarState(jobId)),
             uint256(UnderwritingTypes.SidecarState.SuccessPendingConfirmation)
         );
+    }
+
+    function testPlainAcpJobCanUseNonUsdcBudgetOutsideUnderwriting() public {
+        vm.prank(client);
+        uint256 jobId = acp.createJob(provider, address(evaluator), block.timestamp + 1 days, "plain acp job", address(0), 0);
+
+        vm.prank(client);
+        acp.setBudget(jobId, address(dai), JOB_BUDGET, bytes(""));
+
+        vm.prank(client);
+        acp.fund(jobId, JOB_BUDGET, bytes(""));
+
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        assertEq(job.hook, address(0));
+        assertEq(job.paymentToken, address(dai));
+        assertEq(job.budget, JOB_BUDGET);
+        assertEq(uint256(job.status), uint256(AgenticCommerce.JobStatus.Funded));
+        assertEq(dai.balanceOf(address(acp)), JOB_BUDGET);
     }
 
     function _commit() internal view returns (UnderwritingTypes.UnderwriteCommit memory) {

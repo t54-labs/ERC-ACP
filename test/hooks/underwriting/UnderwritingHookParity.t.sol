@@ -4,12 +4,24 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "@acp/AgenticCommerce.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import "../../../contracts/hooks/underwriting/UnderwritingCoordinator.sol";
-import "../../../contracts/hooks/underwriting/UnderwritingEvaluator.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingHook.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingWorkflowCore.sol";
 import "../../mocks/MockERC20.sol";
+
+error WrongJobStatus();
+error WrongHook();
+error InvalidState();
+
+contract MockHookParityEvaluator {
+    AgenticCommerce public immutable acp;
+    UnderwritingHook public immutable hook;
+
+    constructor(address acpContract_, address hook_) {
+        acp = AgenticCommerce(acpContract_);
+        hook = UnderwritingHook(hook_);
+    }
+}
 
 contract MockHookParitySettlementCoordinator {
     AgenticCommerce public immutable acp;
@@ -24,13 +36,23 @@ contract MockHookParitySettlementCoordinator {
 
     function orchestrateFunding(uint256 jobId) external {
         AgenticCommerce.Job memory job = acp.getJob(jobId);
-        if (job.hook != address(hook)) revert UnderwritingCoordinator.WrongHook();
-        if (job.status != AgenticCommerce.JobStatus.Funded) revert UnderwritingCoordinator.WrongJobStatus();
+        if (job.hook != address(hook)) revert WrongHook();
+        if (job.status != AgenticCommerce.JobStatus.Funded) revert WrongJobStatus();
         if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.FeeEscrowed) {
-            revert UnderwritingCoordinator.InvalidState();
+            revert InvalidState();
         }
 
         hook.markProtected(jobId);
+    }
+}
+
+contract MockHookParityMalformedCoordinator {
+    AgenticCommerce public immutable acp;
+    UnderwritingHook public immutable hook;
+
+    constructor(address acpContract_, address hook_) {
+        acp = AgenticCommerce(acpContract_);
+        hook = UnderwritingHook(hook_);
     }
 }
 
@@ -49,7 +71,7 @@ contract UnderwritingHookParityTest is Test {
     AgenticCommerce internal acp;
     UnderwritingHook internal hook;
     MockHookParitySettlementCoordinator internal coordinator;
-    UnderwritingEvaluator internal evaluator;
+    MockHookParityEvaluator internal evaluator;
 
     function setUp() public {
         (underwriter, underwriterPk) = makeAddrAndKey("underwriter");
@@ -59,7 +81,7 @@ contract UnderwritingHookParityTest is Test {
         hook = _deployHook(address(acp), address(this));
         acp.setHookWhitelist(address(hook), true);
         hook.setAllowedSettlementToken(address(usdc));
-        evaluator = new UnderwritingEvaluator(address(acp), address(hook));
+        evaluator = new MockHookParityEvaluator(address(acp), address(hook));
         coordinator = new MockHookParitySettlementCoordinator(address(acp), address(hook));
 
         hook.setWiring(address(evaluator), address(coordinator));
@@ -70,15 +92,16 @@ contract UnderwritingHookParityTest is Test {
         usdc.approve(address(acp), type(uint256).max);
     }
 
-    function testSetWiringRejectsDeprecatedHookOnlyCoordinator() public {
+    function testSetWiringRejectsCoordinatorWithoutSettlementSurface() public {
         UnderwritingHook secondHook = _deployHook(address(acp), address(this));
         acp.setHookWhitelist(address(secondHook), true);
         secondHook.setAllowedSettlementToken(address(usdc));
-        UnderwritingEvaluator secondEvaluator = new UnderwritingEvaluator(address(acp), address(secondHook));
-        UnderwritingCoordinator deprecatedCoordinator = new UnderwritingCoordinator(address(acp), address(secondHook));
+        MockHookParityEvaluator secondEvaluator = new MockHookParityEvaluator(address(acp), address(secondHook));
+        MockHookParityMalformedCoordinator malformedCoordinator =
+            new MockHookParityMalformedCoordinator(address(acp), address(secondHook));
 
         vm.expectRevert(UnderwritingHook.InvalidWiring.selector);
-        secondHook.setWiring(address(secondEvaluator), address(deprecatedCoordinator));
+        secondHook.setWiring(address(secondEvaluator), address(malformedCoordinator));
     }
 
     function testRootAndCloseLifecycleMatchesCanonicalHookParity() public {
