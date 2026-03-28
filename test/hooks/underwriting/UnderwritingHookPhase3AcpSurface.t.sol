@@ -176,6 +176,41 @@ contract UnderwritingHookPhase3AcpSurfaceTest is Test {
         );
     }
 
+    function test_underwritingHook_beforeAction_setBudget_requiresSettlementTokenConfiguration() public {
+        UnderwritingHook unconfiguredHook = new UnderwritingHook(address(acp), address(this));
+        MockPhase3WiringTarget unconfiguredEvaluator = new MockPhase3WiringTarget(address(acp), address(unconfiguredHook));
+        MockPhase3CoordinatorTarget unconfiguredCoordinator =
+            new MockPhase3CoordinatorTarget(address(acp), address(unconfiguredHook));
+
+        unconfiguredHook.setWiring(address(unconfiguredEvaluator), address(unconfiguredCoordinator));
+        unconfiguredHook.registerUnderwriter(UNDERWRITER);
+
+        acp.setJob(
+            Phase3AcpTypes.Job({
+                id: JOB_ID + 1,
+                client: CLIENT,
+                provider: PROVIDER,
+                evaluator: address(unconfiguredEvaluator),
+                description: "underwriting job without token config",
+                budget: 0,
+                expiredAt: block.timestamp + 1 days,
+                status: Phase3AcpTypes.JobStatus.Open,
+                hook: address(unconfiguredHook),
+                paymentToken: address(0),
+                providerAgentId: 0,
+                submittedAt: 0
+            })
+        );
+
+        vm.expectRevert(UnderwritingWorkflowCore.SettlementTokenNotConfigured.selector);
+        acp.callBeforeAction(
+            unconfiguredHook,
+            JOB_ID + 1,
+            bytes4(keccak256("setBudget(uint256,address,uint256,bytes)")),
+            abi.encode(CLIENT, USDC, AMOUNT, abi.encode(_commit()))
+        );
+    }
+
     function _commit() internal view returns (UnderwritingTypes.UnderwriteCommit memory) {
         return UnderwritingTypes.UnderwriteCommit({
             parentJobId: 0,

@@ -24,6 +24,7 @@ abstract contract UnderwritingWorkflowCore {
     error ParentMismatch();
     error EvidenceMismatch();
     error InvalidState();
+    error SettlementTokenNotConfigured();
     error UnsupportedSettlementToken();
 
     mapping(address => bool) internal registeredUnderwriterByAddress;
@@ -117,7 +118,8 @@ abstract contract UnderwritingWorkflowCore {
 
         if (job.provider == address(0)) revert ProviderRequired();
         if (job.evaluator != expectedEvaluator) revert EvaluatorMismatch();
-        if (allowedSettlementToken != address(0) && paymentToken != allowedSettlementToken) revert UnsupportedSettlementToken();
+        if (allowedSettlementToken == address(0)) revert SettlementTokenNotConfigured();
+        if (paymentToken != allowedSettlementToken) revert UnsupportedSettlementToken();
 
         if (commitHashByJobId[jobId] != bytes32(0)) {
             if (commitHashByJobId[jobId] != newCommitHash) revert CommitLocked();

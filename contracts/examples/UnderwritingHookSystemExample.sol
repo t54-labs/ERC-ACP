@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "../AgenticCommerceHooked.sol";
+import "@acp/AgenticCommerce.sol";
 import "../interfaces/IAgenticCommerceKernel.sol";
 import "../interfaces/ICollateralManager.sol";
 import "../hooks/underwriting/UnderwritingHook.sol";
@@ -15,7 +15,7 @@ import "../settlement/UnderwritingEvaluator.sol";
  * @dev This contract is not part of the canonical shared-environment or production deployment path.
  *      Use `script/DeployUnderwritingSharedEnv.s.sol` for the canonical runtime wiring.
  *      This helper remains as migration-era glue for tests that want a ready-made underwriting
- *      stack on top of `AgenticCommerceHooked`.
+ *      stack on top of the canonical ACP runtime.
  */
 contract UnderwritingHookSystemExample {
     error ZeroAddress();
@@ -44,7 +44,7 @@ contract UnderwritingHookSystemExample {
         uint256 nonce;
     }
 
-    AgenticCommerceHooked public immutable acp;
+    AgenticCommerce public immutable acp;
     ICollateralManager public immutable collateralManager;
     UnderwritingHook public immutable hook;
     UnderwritingSettlementCoordinator public immutable coordinator;
@@ -65,17 +65,26 @@ contract UnderwritingHookSystemExample {
     }
 
     /// @notice Deploys and wires a full underwriting hook stack for the supplied ACP kernel.
-    /// @param acp_ The hooked ACP contract to integrate with.
+    /// @param acp_ The ACP contract to integrate with.
     /// @param collateralManager_ The collateral manager used by settlement escrows.
+    /// @param settlementToken_ The only token protected underwriting jobs may use.
     /// @param clientConfirmationWindowSeconds_ Duration after submission during which only the client may confirm.
-    constructor(AgenticCommerceHooked acp_, ICollateralManager collateralManager_, uint64 clientConfirmationWindowSeconds_) {
-        if (address(acp_) == address(0) || address(collateralManager_) == address(0)) revert ZeroAddress();
+    constructor(
+        AgenticCommerce acp_,
+        ICollateralManager collateralManager_,
+        address settlementToken_,
+        uint64 clientConfirmationWindowSeconds_
+    ) {
+        if (
+            address(acp_) == address(0) || address(collateralManager_) == address(0) || settlementToken_ == address(0)
+        ) revert ZeroAddress();
 
         acp = acp_;
         collateralManager = collateralManager_;
         owner = msg.sender;
 
         hook = new UnderwritingHook(address(acp_), address(this));
+        hook.setAllowedSettlementToken(settlementToken_);
         coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp_)), hook, collateralManager_
         );

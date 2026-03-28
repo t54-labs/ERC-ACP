@@ -2,7 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
-import "contracts/AgenticCommerceHooked.sol";
+import "@acp/AgenticCommerce.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "contracts/hooks/underwriting/UnderwritingHook.sol";
 import "contracts/settlement/UnderwritingSettlementCoordinator.sol";
 import "contracts/settlement/UnderwritingEvaluator.sol";
@@ -23,12 +24,13 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *   CLIENT_CONFIRMATION_WINDOW  — Seconds the client has to confirm after submission.
  *
  * Deploy order:
- *   1. AgenticCommerceHooked
+ *   1. AgenticCommerce implementation + proxy
  *   2. UnderwritingCollateralManager
  *   3. UnderwritingHook
- *   4. UnderwritingSettlementCoordinator
- *   5. UnderwritingEvaluator
- *   6. Wire hook -> (evaluator, coordinator)
+ *   4. Whitelist hook + pin settlement token
+ *   5. UnderwritingSettlementCoordinator
+ *   6. UnderwritingEvaluator
+ *   7. Wire hook -> (evaluator, coordinator)
  *
  * Usage:
  *   forge script script/DeployUnderwritingSharedEnv.s.sol:DeployUnderwritingSharedEnv \
@@ -44,8 +46,11 @@ contract DeployUnderwritingSharedEnv is Script {
 
         vm.startBroadcast(deployerKey);
 
-        // 1. ACP kernel
-        AgenticCommerceHooked acp = new AgenticCommerceHooked(usdc, treasury);
+        // 1. ACP kernel implementation + proxy
+        AgenticCommerce acpImplementation = new AgenticCommerce();
+        ERC1967Proxy acpProxy =
+            new ERC1967Proxy(address(acpImplementation), abi.encodeCall(AgenticCommerce.initialize, (treasury)));
+        AgenticCommerce acp = AgenticCommerce(address(acpProxy));
 
         // 2. Collateral manager
         UnderwritingCollateralManager manager = new UnderwritingCollateralManager(IERC20(usdc));
@@ -53,27 +58,32 @@ contract DeployUnderwritingSharedEnv is Script {
         // 3. Underwriting hook (admin = deployer = msg.sender)
         UnderwritingHook hook = new UnderwritingHook(address(acp), msg.sender);
 
-        // 4. Settlement coordinator
+        // 4. Whitelist hook + pin the settlement token before any protected jobs are created
+        acp.setHookWhitelist(address(hook), true);
+        hook.setAllowedSettlementToken(usdc);
+
+        // 5. Settlement coordinator
         UnderwritingSettlementCoordinator coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp)),
             hook,
             manager
         );
 
-        // 5. Evaluator
+        // 6. Evaluator
         UnderwritingEvaluator evaluator = new UnderwritingEvaluator(
             IAgenticCommerceKernel(address(acp)),
             IUnderwritingHookView(address(hook)),
             clientConfirmationWindow
         );
 
-        // 6. Wire hook to evaluator + coordinator (one-shot)
+        // 7. Wire hook to evaluator + coordinator (one-shot)
         hook.setWiring(address(evaluator), address(coordinator));
 
         vm.stopBroadcast();
 
         // Log deployed addresses for operator reference
-        console.log("ACP:                ", address(acp));
+        console.log("ACP implementation: ", address(acpImplementation));
+        console.log("ACP proxy:          ", address(acp));
         console.log("CollateralManager:  ", address(manager));
         console.log("UnderwritingHook:   ", address(hook));
         console.log("Coordinator:        ", address(coordinator));

@@ -22,6 +22,7 @@ contract UnderwritingSettlementCoordinator is EIP712 {
     error InvalidState();
     error MissingEscrow();
     error PermitMismatch();
+    error UnsupportedSettlementToken();
     error TooEarly();
     error TooLate();
     error SlashExpired();
@@ -82,11 +83,14 @@ contract UnderwritingSettlementCoordinator is EIP712 {
         IAgenticCommerceKernel.Job memory job = _getHookedJob(jobId);
         if (job.status != IAgenticCommerceKernel.JobStatus.Funded) revert WrongJobStatus();
         if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.FeeEscrowed) revert InvalidState();
+        if (job.paymentToken != hook.allowedSettlementToken()) revert UnsupportedSettlementToken();
 
         UnderwritingTypes.UnderwriteCommit memory commit = hook.getCommit(jobId);
         uint256 settlementJobId = hook.jobSettlementJobId(jobId);
         UnderwritingSettlementEscrow escrow =
-            _getOrCreateEscrow(jobId, settlementJobId, job.client, job.provider, permit.merchantExecutionWallet);
+            _getOrCreateEscrow(
+                jobId, settlementJobId, job.paymentToken, job.client, job.provider, permit.merchantExecutionWallet
+            );
 
         _assertPermitMatches(jobId, settlementJobId, job, commit, permit, address(escrow));
         unlockAtByJobId[jobId] = permit.unlockAt;
@@ -265,6 +269,7 @@ contract UnderwritingSettlementCoordinator is EIP712 {
     function _getOrCreateEscrow(
         uint256 jobId,
         uint256 settlementJobId,
+        address paymentToken,
         address client,
         address provider,
         address merchantExecutionWallet
@@ -274,7 +279,7 @@ contract UnderwritingSettlementCoordinator is EIP712 {
             return UnderwritingSettlementEscrow(existing);
         }
 
-        escrow = new UnderwritingSettlementEscrow(acp.paymentToken(), collateralManager, address(this));
+        escrow = new UnderwritingSettlementEscrow(paymentToken, collateralManager, address(this));
         escrow.configure(jobId, client, provider, settlementJobId, merchantExecutionWallet);
         escrowBySettlementJobId[settlementJobId] = address(escrow);
         jobSettlementState[jobId] = SettlementTypes.SettlementState.EscrowConfigured;

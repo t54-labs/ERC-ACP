@@ -2,7 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../../contracts/AgenticCommerceHooked.sol";
+import "@acp/AgenticCommerce.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingCoordinator.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingEvaluator.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingHook.sol";
@@ -11,20 +12,20 @@ import "../../../contracts/hooks/underwriting/UnderwritingWorkflowCore.sol";
 import "../../mocks/MockERC20.sol";
 
 contract MockHookParitySettlementCoordinator {
-    AgenticCommerceHooked public immutable acp;
+    AgenticCommerce public immutable acp;
     UnderwritingHook public immutable hook;
     address public immutable collateralManager;
 
     constructor(address acpContract_, address hook_) {
-        acp = AgenticCommerceHooked(acpContract_);
+        acp = AgenticCommerce(acpContract_);
         hook = UnderwritingHook(hook_);
         collateralManager = address(this);
     }
 
     function orchestrateFunding(uint256 jobId) external {
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
         if (job.hook != address(hook)) revert UnderwritingCoordinator.WrongHook();
-        if (job.status != AgenticCommerceHooked.JobStatus.Funded) revert UnderwritingCoordinator.WrongJobStatus();
+        if (job.status != AgenticCommerce.JobStatus.Funded) revert UnderwritingCoordinator.WrongJobStatus();
         if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.FeeEscrowed) {
             revert UnderwritingCoordinator.InvalidState();
         }
@@ -45,7 +46,7 @@ contract UnderwritingHookParityTest is Test {
     address internal underwriter;
 
     MockERC20 internal usdc;
-    AgenticCommerceHooked internal acp;
+    AgenticCommerce internal acp;
     UnderwritingHook internal hook;
     MockHookParitySettlementCoordinator internal coordinator;
     UnderwritingEvaluator internal evaluator;
@@ -54,8 +55,10 @@ contract UnderwritingHookParityTest is Test {
         (underwriter, underwriterPk) = makeAddrAndKey("underwriter");
 
         usdc = new MockERC20("Mock USDC", "mUSDC");
-        acp = new AgenticCommerceHooked(address(usdc), treasury);
+        acp = _deployAcp(treasury);
         hook = new UnderwritingHook(address(acp), address(this));
+        acp.setHookWhitelist(address(hook), true);
+        hook.setAllowedSettlementToken(address(usdc));
         evaluator = new UnderwritingEvaluator(address(acp), address(hook));
         coordinator = new MockHookParitySettlementCoordinator(address(acp), address(hook));
 
@@ -69,6 +72,8 @@ contract UnderwritingHookParityTest is Test {
 
     function testSetWiringRejectsDeprecatedHookOnlyCoordinator() public {
         UnderwritingHook secondHook = new UnderwritingHook(address(acp), address(this));
+        acp.setHookWhitelist(address(secondHook), true);
+        secondHook.setAllowedSettlementToken(address(usdc));
         UnderwritingEvaluator secondEvaluator = new UnderwritingEvaluator(address(acp), address(secondHook));
         UnderwritingCoordinator deprecatedCoordinator = new UnderwritingCoordinator(address(acp), address(secondHook));
 
@@ -81,12 +86,12 @@ contract UnderwritingHookParityTest is Test {
 
         vm.expectRevert(UnderwritingWorkflowCore.UnderwriterNotRegistered.selector);
         vm.prank(client);
-        acp.setBudget(rootJobId, JOB_BUDGET, abi.encode(_commit(0, true)));
+        acp.setBudget(rootJobId, address(usdc), JOB_BUDGET, abi.encode(_commit(0, true)));
 
         hook.registerUnderwriter(underwriter);
 
         vm.prank(client);
-        acp.setBudget(rootJobId, JOB_BUDGET, abi.encode(_commit(0, true)));
+        acp.setBudget(rootJobId, address(usdc), JOB_BUDGET, abi.encode(_commit(0, true)));
 
         assertEq(uint256(hook.jobSidecarState(rootJobId)), uint256(UnderwritingTypes.SidecarState.Committed));
         assertEq(hook.jobUnderwriter(rootJobId), underwriter);
@@ -121,7 +126,7 @@ contract UnderwritingHookParityTest is Test {
         uint256 closeJobId = _createJob(provider, "close underwriting job");
 
         vm.prank(client);
-        acp.setBudget(closeJobId, JOB_BUDGET / 2, abi.encode(_commit(rootJobId, false)));
+        acp.setBudget(closeJobId, address(usdc), JOB_BUDGET / 2, abi.encode(_commit(rootJobId, false)));
 
         assertEq(hook.getParentJobId(closeJobId), rootJobId);
         assertEq(hook.getActiveCloseJobId(rootJobId), closeJobId);
@@ -151,7 +156,7 @@ contract UnderwritingHookParityTest is Test {
         uint256 rootJobId = _createJob(provider, "root underwriting job");
 
         vm.startPrank(client);
-        acp.setBudget(rootJobId, JOB_BUDGET, abi.encode(_commit(0, true)));
+        acp.setBudget(rootJobId, address(usdc), JOB_BUDGET, abi.encode(_commit(0, true)));
         acp.fund(rootJobId, JOB_BUDGET, bytes(""));
         vm.stopPrank();
 
@@ -168,7 +173,7 @@ contract UnderwritingHookParityTest is Test {
 
         vm.expectRevert(UnderwritingWorkflowCore.ParentMismatch.selector);
         vm.prank(client);
-        acp.setBudget(badCloseJobId, JOB_BUDGET / 2, abi.encode(_commit(rootJobId, false)));
+        acp.setBudget(badCloseJobId, address(usdc), JOB_BUDGET / 2, abi.encode(_commit(rootJobId, false)));
     }
 
     function testCloseJobRejectClearsActiveLinkageAndAllowsReplacement() public {
@@ -177,7 +182,7 @@ contract UnderwritingHookParityTest is Test {
         uint256 rootJobId = _createJob(provider, "root underwriting job");
 
         vm.startPrank(client);
-        acp.setBudget(rootJobId, JOB_BUDGET, abi.encode(_commit(0, true)));
+        acp.setBudget(rootJobId, address(usdc), JOB_BUDGET, abi.encode(_commit(0, true)));
         acp.fund(rootJobId, JOB_BUDGET, bytes(""));
         vm.stopPrank();
 
@@ -193,7 +198,7 @@ contract UnderwritingHookParityTest is Test {
         uint256 closeJobId = _createJob(provider, "close underwriting job");
 
         vm.prank(client);
-        acp.setBudget(closeJobId, JOB_BUDGET / 2, abi.encode(_commit(rootJobId, false)));
+        acp.setBudget(closeJobId, address(usdc), JOB_BUDGET / 2, abi.encode(_commit(rootJobId, false)));
 
         assertEq(hook.getActiveCloseJobId(rootJobId), closeJobId);
 
@@ -206,7 +211,7 @@ contract UnderwritingHookParityTest is Test {
         uint256 replacementCloseJobId = _createJob(provider, "replacement close underwriting job");
 
         vm.prank(client);
-        acp.setBudget(replacementCloseJobId, JOB_BUDGET / 3, abi.encode(_commit(rootJobId, false)));
+        acp.setBudget(replacementCloseJobId, address(usdc), JOB_BUDGET / 3, abi.encode(_commit(rootJobId, false)));
 
         assertEq(hook.getActiveCloseJobId(rootJobId), replacementCloseJobId);
         assertEq(hook.getParentJobId(replacementCloseJobId), rootJobId);
@@ -214,7 +219,7 @@ contract UnderwritingHookParityTest is Test {
 
     function _createJob(address provider_, string memory description) internal returns (uint256 jobId) {
         vm.prank(client);
-        jobId = acp.createJob(provider_, address(evaluator), block.timestamp + 1 days, description, address(hook));
+        jobId = acp.createJob(provider_, address(evaluator), block.timestamp + 1 days, description, address(hook), 0);
     }
 
     function _commit(uint256 parentJobId, bool allowCloseJob)
@@ -240,5 +245,11 @@ contract UnderwritingHookParityTest is Test {
             quoteIdHash: keccak256("quote"),
             termsHash: keccak256("terms")
         });
+    }
+
+    function _deployAcp(address treasury_) internal returns (AgenticCommerce) {
+        AgenticCommerce implementation = new AgenticCommerce();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), abi.encodeCall(AgenticCommerce.initialize, (treasury_)));
+        return AgenticCommerce(address(proxy));
     }
 }

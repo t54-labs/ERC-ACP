@@ -13,7 +13,7 @@ import "../mocks/MockCollateralManager.sol";
 import "../mocks/MockERC20.sol";
 
 contract MockSettlementACP is IAgenticCommerceKernel {
-    address public override paymentToken;
+    address public paymentToken;
     mapping(uint256 jobId => Job) internal jobs;
 
     constructor(address paymentToken_) {
@@ -40,11 +40,11 @@ contract MockSettlementACP is IAgenticCommerceKernel {
         return 0;
     }
 
-    function setProvider(uint256, address, bytes calldata) external pure override {
+    function setProvider(uint256, address, uint256) external pure override {
         revert("unused");
     }
 
-    function setBudget(uint256, uint256, bytes calldata) external pure override {
+    function setBudget(uint256, address, uint256, bytes calldata) external pure override {
         revert("unused");
     }
 
@@ -69,6 +69,7 @@ contract MockUnderwritingHook {
     bool public markProtectedCalled;
     uint256 public lastMarkedJobId;
     address public evaluator;
+    address public allowedSettlementToken;
 
     mapping(uint256 jobId => UnderwritingTypes.SidecarState) internal sidecarStates;
     mapping(uint256 jobId => bool) internal awaitingCloseByJobId;
@@ -77,6 +78,10 @@ contract MockUnderwritingHook {
 
     function setEvaluator(address evaluator_) external {
         evaluator = evaluator_;
+    }
+
+    function setAllowedSettlementToken(address allowedSettlementToken_) external {
+        allowedSettlementToken = allowedSettlementToken_;
     }
 
     function seedJob(
@@ -147,6 +152,7 @@ contract UnderwritingSettlementCoordinatorTest is Test {
         coordinator =
             new UnderwritingSettlementCoordinator(acp, UnderwritingHook(address(hook)), collateralManager);
         hook.setEvaluator(evaluatorAddr);
+        hook.setAllowedSettlementToken(address(usdc));
 
         usdc.mint(client, 1_000e18);
         usdc.mint(provider, 1_000e18);
@@ -345,11 +351,14 @@ contract UnderwritingSettlementCoordinatorTest is Test {
             client: client,
             provider: provider,
             evaluator: evaluatorAddr,
-            hook: address(hook),
             description: "underwriting settlement job",
             budget: PROVIDER_BUDGET,
             expiredAt: block.timestamp + 1 days,
-            status: status_
+            status: status_,
+            hook: address(hook),
+            paymentToken: acp.paymentToken(),
+            providerAgentId: 0,
+            submittedAt: 0
         });
     }
 

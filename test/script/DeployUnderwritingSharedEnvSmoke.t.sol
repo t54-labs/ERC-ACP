@@ -2,7 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../contracts/AgenticCommerceHooked.sol";
+import "@acp/AgenticCommerce.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../../contracts/hooks/underwriting/UnderwritingHook.sol";
 import "../../contracts/settlement/UnderwritingSettlementCoordinator.sol";
 import "../../contracts/settlement/UnderwritingEvaluator.sol";
@@ -23,9 +24,11 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
 
         vm.startPrank(deployer);
 
-        AgenticCommerceHooked acp = new AgenticCommerceHooked(address(usdc), treasury);
+        AgenticCommerce acp = _deployAcp(treasury);
         UnderwritingCollateralManager manager = new UnderwritingCollateralManager(IERC20(address(usdc)));
         UnderwritingHook hook = new UnderwritingHook(address(acp), deployer);
+        acp.setHookWhitelist(address(hook), true);
+        hook.setAllowedSettlementToken(address(usdc));
 
         UnderwritingSettlementCoordinator coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp)), hook, manager
@@ -51,6 +54,8 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
 
         assertEq(hook.evaluator(), address(evaluator));
         assertEq(hook.coordinator(), address(coordinator));
+        assertEq(hook.allowedSettlementToken(), address(usdc));
+        assertTrue(acp.whitelistedHooks(address(hook)));
     }
 
     function testRegisterUnderwriterAndConfigureRecipients() public {
@@ -61,9 +66,11 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
 
         vm.startPrank(deployer);
 
-        AgenticCommerceHooked acp = new AgenticCommerceHooked(address(usdc), treasury);
+        AgenticCommerce acp = _deployAcp(treasury);
         UnderwritingCollateralManager manager = new UnderwritingCollateralManager(IERC20(address(usdc)));
         UnderwritingHook hook = new UnderwritingHook(address(acp), deployer);
+        acp.setHookWhitelist(address(hook), true);
+        hook.setAllowedSettlementToken(address(usdc));
 
         UnderwritingSettlementCoordinator coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp)), hook, manager
@@ -87,5 +94,11 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
         (address storedPremium, address storedRecovery) = manager.recipientsByUnderwriter(underwriter);
         assertEq(storedPremium, premiumRecipient);
         assertEq(storedRecovery, recoveryRecipient);
+    }
+
+    function _deployAcp(address treasury_) internal returns (AgenticCommerce) {
+        AgenticCommerce implementation = new AgenticCommerce();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), abi.encodeCall(AgenticCommerce.initialize, (treasury_)));
+        return AgenticCommerce(address(proxy));
     }
 }

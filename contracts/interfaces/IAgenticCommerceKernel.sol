@@ -31,15 +31,15 @@ interface IAgenticCommerceKernel {
         address client;
         address provider;
         address evaluator;
-        address hook;
         string description;
         uint256 budget;
         uint256 expiredAt;
         JobStatus status;
+        address hook;
+        address paymentToken;
+        uint256 providerAgentId;
+        uint256 submittedAt;
     }
-
-    /// @notice Returns the ERC20 token address used for ACP settlement.
-    function paymentToken() external view returns (address);
 
     /// @notice Returns the stored job record for `jobId`.
     /// @param jobId The job identifier to fetch.
@@ -64,14 +64,15 @@ interface IAgenticCommerceKernel {
     /// @notice Assigns a provider to a job created without one.
     /// @param jobId The job to update.
     /// @param provider The provider address to set.
-    /// @param optParams Hook-specific auxiliary parameters forwarded by ACP.
-    function setProvider(uint256 jobId, address provider, bytes calldata optParams) external;
+    /// @param agentId Optional provider agent id recorded by ACP.
+    function setProvider(uint256 jobId, address provider, uint256 agentId) external;
 
     /// @notice Records the job budget that must be escrowed before execution.
     /// @param jobId The job to update.
+    /// @param token The ERC20 token to escrow for this job.
     /// @param amount The proposed budget amount.
     /// @param optParams Hook-specific auxiliary parameters forwarded by ACP.
-    function setBudget(uint256 jobId, uint256 amount, bytes calldata optParams) external;
+    function setBudget(uint256 jobId, address token, uint256 amount, bytes calldata optParams) external;
 
     /// @notice Escrows the job budget for a previously configured job.
     /// @param jobId The job to fund.

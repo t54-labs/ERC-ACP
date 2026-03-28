@@ -2,7 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../contracts/AgenticCommerceHooked.sol";
+import "@acp/AgenticCommerce.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../../contracts/examples/UnderwritingHookSystemExample.sol";
 import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../contracts/settlement/SettlementTypes.sol";
@@ -29,7 +30,7 @@ contract UnderwritingHookSystemExampleTest is Test {
 
     MockERC20 internal usdc;
     MockCollateralManager internal collateralManager;
-    AgenticCommerceHooked internal acp;
+    AgenticCommerce internal acp;
     UnderwritingHookSystemExample internal example;
 
     function setUp() public {
@@ -37,8 +38,9 @@ contract UnderwritingHookSystemExampleTest is Test {
 
         usdc = new MockERC20("Mock USDC", "mUSDC");
         collateralManager = new MockCollateralManager(usdc);
-        acp = new AgenticCommerceHooked(address(usdc), treasury);
-        example = new UnderwritingHookSystemExample(acp, collateralManager, CLIENT_CONFIRM_WINDOW);
+        acp = _deployAcp(treasury);
+        example = new UnderwritingHookSystemExample(acp, collateralManager, address(usdc), CLIENT_CONFIRM_WINDOW);
+        acp.setHookWhitelist(address(example.hook()), true);
 
         usdc.mint(client, 1_000_000e6);
         usdc.mint(provider, 1_000_000e6);
@@ -56,7 +58,8 @@ contract UnderwritingHookSystemExampleTest is Test {
             address(example.evaluator()),
             block.timestamp + 1 days,
             "underwriting root job",
-            address(example.hook())
+            address(example.hook()),
+            0
         );
 
         UnderwritingHookSystemExample.CommitInputs memory commitInputs = UnderwritingHookSystemExample.CommitInputs({
@@ -87,7 +90,7 @@ contract UnderwritingHookSystemExampleTest is Test {
         usdc.approve(address(acp), PROVIDER_BUDGET);
         usdc.approve(address(collateralManager), permitInputs.underwritingPremiumUsdc);
         usdc.approve(predictedEscrow, permitInputs.fundedPrincipalUsdc);
-        acp.setBudget(jobId, PROVIDER_BUDGET, example.encodeCommit(commit));
+        acp.setBudget(jobId, address(usdc), PROVIDER_BUDGET, example.encodeCommit(commit));
         acp.fund(jobId, PROVIDER_BUDGET, bytes(""));
         vm.stopPrank();
 
@@ -118,8 +121,8 @@ contract UnderwritingHookSystemExampleTest is Test {
 
         example.evaluator().completeBySig(decision, _signCompleteDecision(decision));
 
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
-        assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Completed));
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        assertEq(uint256(job.status), uint256(AgenticCommerce.JobStatus.Completed));
         assertEq(
             uint256(example.hook().jobSidecarState(jobId)),
             uint256(UnderwritingTypes.SidecarState.SuccessPendingConfirmation)
@@ -144,7 +147,8 @@ contract UnderwritingHookSystemExampleTest is Test {
             address(example.evaluator()),
             block.timestamp + 1 days,
             "underwriting root job",
-            address(example.hook())
+            address(example.hook()),
+            0
         );
         vm.stopPrank();
 
@@ -161,8 +165,8 @@ contract UnderwritingHookSystemExampleTest is Test {
         vm.prank(client);
         eval.confirmByClient(jobId, keccak256("client-happy"));
 
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
-        assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Completed));
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        assertEq(uint256(job.status), uint256(AgenticCommerce.JobStatus.Completed));
         assertEq(
             uint256(example.hook().jobSidecarState(jobId)),
             uint256(UnderwritingTypes.SidecarState.SuccessPendingConfirmation)
@@ -189,7 +193,8 @@ contract UnderwritingHookSystemExampleTest is Test {
             address(example.evaluator()),
             block.timestamp + 1 days,
             "underwriting root job",
-            address(example.hook())
+            address(example.hook()),
+            0
         );
         vm.stopPrank();
 
@@ -219,7 +224,8 @@ contract UnderwritingHookSystemExampleTest is Test {
             address(example.evaluator()),
             block.timestamp + 1 days,
             "underwriting root job",
-            address(example.hook())
+            address(example.hook()),
+            0
         );
         vm.stopPrank();
 
@@ -253,7 +259,8 @@ contract UnderwritingHookSystemExampleTest is Test {
             address(example.evaluator()),
             block.timestamp + 1 days,
             "underwriting root job",
-            address(example.hook())
+            address(example.hook()),
+            0
         );
         vm.stopPrank();
 
@@ -275,7 +282,8 @@ contract UnderwritingHookSystemExampleTest is Test {
             address(example.evaluator()),
             block.timestamp + 2 days,
             "underwriting close job",
-            address(example.hook())
+            address(example.hook()),
+            0
         );
         vm.stopPrank();
 
@@ -325,7 +333,8 @@ contract UnderwritingHookSystemExampleTest is Test {
             address(example.evaluator()),
             block.timestamp + 1 days,
             "underwriting root job",
-            address(example.hook())
+            address(example.hook()),
+            0
         );
         vm.stopPrank();
 
@@ -339,7 +348,8 @@ contract UnderwritingHookSystemExampleTest is Test {
             address(example.evaluator()),
             block.timestamp + 2 days,
             "underwriting close job",
-            address(example.hook())
+            address(example.hook()),
+            0
         );
         vm.stopPrank();
 
@@ -415,7 +425,7 @@ contract UnderwritingHookSystemExampleTest is Test {
             usdc.approve(address(collateralManager), permitInputs.underwritingPremiumUsdc);
             usdc.approve(predictedEscrow, permitInputs.fundedPrincipalUsdc);
         }
-        acp.setBudget(jobId, PROVIDER_BUDGET, example.encodeCommit(commit));
+        acp.setBudget(jobId, address(usdc), PROVIDER_BUDGET, example.encodeCommit(commit));
         acp.fund(jobId, PROVIDER_BUDGET, bytes(""));
         vm.stopPrank();
 
@@ -496,5 +506,11 @@ contract UnderwritingHookSystemExampleTest is Test {
                 address(example.evaluator())
             )
         );
+    }
+
+    function _deployAcp(address treasury_) internal returns (AgenticCommerce) {
+        AgenticCommerce implementation = new AgenticCommerce();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), abi.encodeCall(AgenticCommerce.initialize, (treasury_)));
+        return AgenticCommerce(address(proxy));
     }
 }

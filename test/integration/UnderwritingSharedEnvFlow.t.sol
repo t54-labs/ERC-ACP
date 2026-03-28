@@ -2,7 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../contracts/AgenticCommerceHooked.sol";
+import "@acp/AgenticCommerce.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../../contracts/interfaces/IAgenticCommerceKernel.sol";
 import "../../contracts/interfaces/ICollateralManager.sol";
 import "../../contracts/hooks/underwriting/UnderwritingHook.sol";
@@ -66,7 +67,7 @@ contract UnderwritingSharedEnvFlowTest is Test {
 
     MockERC20 internal usdc;
     UnderwritingCollateralManager internal collateralManager;
-    AgenticCommerceHooked internal acp;
+    AgenticCommerce internal acp;
     UnderwritingHook internal hook;
     UnderwritingSettlementCoordinator internal coordinator;
     UnderwritingEvaluator internal evaluator;
@@ -76,7 +77,7 @@ contract UnderwritingSharedEnvFlowTest is Test {
 
         // Deploy token and core ACP
         usdc = new MockERC20("Mock USDC", "mUSDC");
-        acp = new AgenticCommerceHooked(address(usdc), treasury);
+        acp = _deployAcp(treasury);
 
         // Deploy the REAL collateral manager
         collateralManager = new UnderwritingCollateralManager(usdc);
@@ -84,6 +85,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
         // Deploy underwriting stack manually so we control CLIENT_CONFIRM_WINDOW
         // admin = address(this) so we can call registerUnderwriter directly
         hook = new UnderwritingHook(address(acp), address(this));
+        acp.setHookWhitelist(address(hook), true);
+        hook.setAllowedSettlementToken(address(usdc));
         coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp)),
             hook,
@@ -122,7 +125,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
             address(evaluator),
             block.timestamp + 1 days,
             "shared env e2e confirm",
-            address(hook)
+            address(hook),
+            0
         );
         vm.stopPrank();
 
@@ -136,7 +140,7 @@ contract UnderwritingSharedEnvFlowTest is Test {
         usdc.approve(address(acp), PROVIDER_BUDGET);
         usdc.approve(address(collateralManager), UNDERWRITING_PREMIUM);
         usdc.approve(predictedEscrow, FUNDED_PRINCIPAL);
-        acp.setBudget(jobId, PROVIDER_BUDGET, abi.encode(commit));
+        acp.setBudget(jobId, address(usdc), PROVIDER_BUDGET, abi.encode(commit));
         acp.fund(jobId, PROVIDER_BUDGET, bytes(""));
         vm.stopPrank();
 
@@ -174,8 +178,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
         evaluator.confirmByClient(jobId, keccak256("client-happy"));
 
         // Verify job completed and ACP budget released to provider
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
-        assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Completed), "job not completed");
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        assertEq(uint256(job.status), uint256(AgenticCommerce.JobStatus.Completed), "job not completed");
         assertEq(
             uint256(hook.jobSidecarState(jobId)),
             uint256(UnderwritingTypes.SidecarState.SuccessPendingConfirmation),
@@ -214,7 +218,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
             address(evaluator),
             block.timestamp + 1 days,
             "shared env e2e reject",
-            address(hook)
+            address(hook),
+            0
         );
         vm.stopPrank();
 
@@ -247,8 +252,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
         assertEq(usdc.balanceOf(client) - clientBefore, PROVIDER_BUDGET, "budget not refunded to client");
 
         // Job should be rejected
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
-        assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Rejected), "job not rejected");
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        assertEq(uint256(job.status), uint256(AgenticCommerce.JobStatus.Rejected), "job not rejected");
 
         // ── Finalize rejected job — collateral goes to recoveryRecipient ──
         coordinator.finalizeRejectedJob(jobId);
@@ -279,7 +284,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
             address(evaluator),
             block.timestamp + 1 days,
             "shared env e2e timeout",
-            address(hook)
+            address(hook),
+            0
         );
         vm.stopPrank();
 
@@ -305,8 +311,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
         acp.claimRefund(jobId);
 
         assertEq(usdc.balanceOf(client) - clientBefore, PROVIDER_BUDGET, "budget not refunded");
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
-        assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Expired), "job not expired");
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        assertEq(uint256(job.status), uint256(AgenticCommerce.JobStatus.Expired), "job not expired");
 
         // ── Settle expiry — collateral goes to recoveryRecipient ──
         uint256 recoveryBefore = usdc.balanceOf(recoveryRecipient);
@@ -337,7 +343,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
             address(evaluator),
             block.timestamp + 1 days,
             "shared env e2e dispute slash",
-            address(hook)
+            address(hook),
+            0
         );
         vm.stopPrank();
 
@@ -351,8 +358,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
         vm.prank(client);
         evaluator.confirmByClient(jobId, keccak256("client-happy"));
 
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
-        assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Completed), "job not completed");
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        assertEq(uint256(job.status), uint256(AgenticCommerce.JobStatus.Completed), "job not completed");
 
         vm.prank(provider);
         coordinator.requestCollateralRelease(jobId);
@@ -403,7 +410,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
             address(evaluator),
             block.timestamp + 1 days,
             "shared env funding semantics",
-            address(hook)
+            address(hook),
+            0
         );
         vm.stopPrank();
 
@@ -441,7 +449,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
             address(evaluator),
             block.timestamp + 1 days,
             "slash without dispute",
-            address(hook)
+            address(hook),
+            0
         );
         vm.stopPrank();
 
@@ -483,7 +492,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
             address(evaluator),
             block.timestamp + 1 days,
             "dispute too late",
-            address(hook)
+            address(hook),
+            0
         );
         vm.stopPrank();
 
@@ -516,7 +526,8 @@ contract UnderwritingSharedEnvFlowTest is Test {
             address(evaluator),
             block.timestamp + 1 days,
             "release blocked dispute",
-            address(hook)
+            address(hook),
+            0
         );
         vm.stopPrank();
 
@@ -616,7 +627,7 @@ contract UnderwritingSharedEnvFlowTest is Test {
             usdc.approve(address(collateralManager), UNDERWRITING_PREMIUM);
             usdc.approve(predictedEscrow, FUNDED_PRINCIPAL);
         }
-        acp.setBudget(jobId, PROVIDER_BUDGET, abi.encode(commit));
+        acp.setBudget(jobId, address(usdc), PROVIDER_BUDGET, abi.encode(commit));
         acp.fund(jobId, PROVIDER_BUDGET, bytes(""));
         vm.stopPrank();
 
@@ -762,5 +773,11 @@ contract UnderwritingSharedEnvFlowTest is Test {
                 address(coordinator)
             )
         );
+    }
+
+    function _deployAcp(address treasury_) internal returns (AgenticCommerce) {
+        AgenticCommerce implementation = new AgenticCommerce();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), abi.encodeCall(AgenticCommerce.initialize, (treasury_)));
+        return AgenticCommerce(address(proxy));
     }
 }

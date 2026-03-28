@@ -2,7 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../../../contracts/AgenticCommerceHooked.sol";
+import "@acp/AgenticCommerce.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingCoordinator.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingEvaluator.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingHook.sol";
@@ -10,20 +11,20 @@ import "../../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../mocks/MockERC20.sol";
 
 contract MockEvaluatorParitySettlementCoordinator {
-    AgenticCommerceHooked public immutable acp;
+    AgenticCommerce public immutable acp;
     UnderwritingHook public immutable hook;
     address public immutable collateralManager;
 
     constructor(address acpContract_, address hook_) {
-        acp = AgenticCommerceHooked(acpContract_);
+        acp = AgenticCommerce(acpContract_);
         hook = UnderwritingHook(hook_);
         collateralManager = address(this);
     }
 
     function orchestrateFunding(uint256 jobId) external {
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
         if (job.hook != address(hook)) revert UnderwritingCoordinator.WrongHook();
-        if (job.status != AgenticCommerceHooked.JobStatus.Funded) revert UnderwritingCoordinator.WrongJobStatus();
+        if (job.status != AgenticCommerce.JobStatus.Funded) revert UnderwritingCoordinator.WrongJobStatus();
         if (hook.jobSidecarState(jobId) != UnderwritingTypes.SidecarState.FeeEscrowed) {
             revert UnderwritingCoordinator.InvalidState();
         }
@@ -46,7 +47,7 @@ contract UnderwritingEvaluatorParityTest is Test {
     address internal underwriter;
 
     MockERC20 internal usdc;
-    AgenticCommerceHooked internal acp;
+    AgenticCommerce internal acp;
     UnderwritingHook internal hook;
     MockEvaluatorParitySettlementCoordinator internal coordinator;
     UnderwritingEvaluator internal evaluator;
@@ -55,8 +56,10 @@ contract UnderwritingEvaluatorParityTest is Test {
         (underwriter, underwriterPk) = makeAddrAndKey("underwriter");
 
         usdc = new MockERC20("Mock USDC", "mUSDC");
-        acp = new AgenticCommerceHooked(address(usdc), treasury);
+        acp = _deployAcp(treasury);
         hook = new UnderwritingHook(address(acp), address(this));
+        acp.setHookWhitelist(address(hook), true);
+        hook.setAllowedSettlementToken(address(usdc));
         evaluator = new UnderwritingEvaluator(address(acp), address(hook));
         coordinator = new MockEvaluatorParitySettlementCoordinator(address(acp), address(hook));
 
@@ -99,8 +102,8 @@ contract UnderwritingEvaluatorParityTest is Test {
 
         evaluator.completeBySig(decision, _signCompleteDecision(decision));
 
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
-        assertEq(uint256(job.status), uint256(AgenticCommerceHooked.JobStatus.Completed));
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        assertEq(uint256(job.status), uint256(AgenticCommerce.JobStatus.Completed));
         assertEq(
             uint256(hook.jobSidecarState(jobId)),
             uint256(UnderwritingTypes.SidecarState.SuccessPendingConfirmation)
@@ -109,10 +112,10 @@ contract UnderwritingEvaluatorParityTest is Test {
 
     function _createCommittedFundedProtectedJob() internal returns (uint256 jobId) {
         vm.prank(client);
-        jobId = acp.createJob(provider, address(evaluator), block.timestamp + 1 days, "underwriting job", address(hook));
+        jobId = acp.createJob(provider, address(evaluator), block.timestamp + 1 days, "underwriting job", address(hook), 0);
 
         vm.startPrank(client);
-        acp.setBudget(jobId, JOB_BUDGET, abi.encode(_commit()));
+        acp.setBudget(jobId, address(usdc), JOB_BUDGET, abi.encode(_commit()));
         acp.fund(jobId, JOB_BUDGET, bytes(""));
         vm.stopPrank();
 
@@ -162,5 +165,11 @@ contract UnderwritingEvaluatorParityTest is Test {
                 address(evaluator)
             )
         );
+    }
+
+    function _deployAcp(address treasury_) internal returns (AgenticCommerce) {
+        AgenticCommerce implementation = new AgenticCommerce();
+        ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), abi.encodeCall(AgenticCommerce.initialize, (treasury_)));
+        return AgenticCommerce(address(proxy));
     }
 }

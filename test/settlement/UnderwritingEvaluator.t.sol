@@ -8,7 +8,7 @@ import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../contracts/settlement/UnderwritingEvaluator.sol";
 
 contract MockSettlementEvaluatorACP is IAgenticCommerceKernel {
-    address public override paymentToken;
+    address public paymentToken;
     mapping(uint256 jobId => Job) internal jobs;
     bool public completeCalled;
     bool public rejectCalled;
@@ -39,11 +39,11 @@ contract MockSettlementEvaluatorACP is IAgenticCommerceKernel {
         return 0;
     }
 
-    function setProvider(uint256, address, bytes calldata) external pure override {
+    function setProvider(uint256, address, uint256) external pure override {
         revert("unused");
     }
 
-    function setBudget(uint256, uint256, bytes calldata) external pure override {
+    function setBudget(uint256, address, uint256, bytes calldata) external pure override {
         revert("unused");
     }
 
@@ -275,11 +275,14 @@ contract UnderwritingEvaluatorTest is Test {
                 client: makeAddr("client"),
                 provider: makeAddr("provider"),
                 evaluator: address(evaluator),
-                hook: address(hook),
                 description: "settlement evaluator job",
                 budget: 1,
                 expiredAt: block.timestamp + 1 days,
-                status: status_
+                status: status_,
+                hook: address(hook),
+                paymentToken: acp.paymentToken(),
+                providerAgentId: 0,
+                submittedAt: 0
             })
         );
         hook.seed(jobId, sidecarState, underwriter, jobId);
