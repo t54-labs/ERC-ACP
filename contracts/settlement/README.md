@@ -21,16 +21,17 @@ The lightweight `hooks/underwriting/UnderwritingCoordinator.sol`, `hooks/underwr
 
 ## Target Canonical Flow
 
-This section describes the target runtime shape the migration is converging to. The checked-in `script/DeployUnderwritingSharedEnv.s.sol` still deploys the legacy `AgenticCommerceHooked` path today and will be rewritten in phase 8, so treat the flow below as the canonical destination rather than a claim that the script already matches it.
+This section describes the checked-in canonical runtime path. `script/DeployUnderwritingSharedEnv.s.sol` now deploys proxied `@acp/AgenticCommerce.sol`, whitelists `UnderwritingHook` inside ACP, pins the settlement token on the hook, and then wires the settlement-side components.
 
-1. Deploy the long-lived canonical components: `@acp/AgenticCommerce.sol`, `settlement/UnderwritingCollateralManager.sol`, `hooks/underwriting/UnderwritingHook.sol`, `settlement/UnderwritingSettlementCoordinator.sol`, and the settlement-side `settlement/UnderwritingEvaluator.sol`.
-2. Wire the hook to the settlement-side evaluator and coordinator once via `setWiring(...)`.
-3. Register underwriters via `registerUnderwriter(...)` and set their recipients via `setUnderwriterRecipients(...)`.
-4. Create an ACP job with `hook = UnderwritingHook` and `evaluator = settlement/UnderwritingEvaluator.sol`.
-5. Commit underwriting terms during `setBudget(...)`.
-6. Fund the ACP job, then call `orchestrateFunding(...)` with the matching `UnderwritePermit`. Premium is paid immediately to the underwriter's `premiumRecipient`; collateral is locked in the collateral manager; funded principal is released to the merchant execution wallet.
-7. Provider submits evidence through ACP before `expiredAt`.
-8. Client confirms inside `clientConfirmationWindowSeconds`, or the underwriter adjudicates after the window with `completeBySig(...)` or `rejectBySig(...)`.
+1. Deploy the long-lived canonical components: proxied `@acp/AgenticCommerce.sol`, `settlement/UnderwritingCollateralManager.sol`, `hooks/underwriting/UnderwritingHook.sol`, `settlement/UnderwritingSettlementCoordinator.sol`, and the settlement-side `settlement/UnderwritingEvaluator.sol`.
+2. Whitelist `UnderwritingHook` in ACP and call `setAllowedSettlementToken(...)` before any protected underwriting jobs are created.
+3. Wire the hook to the settlement-side evaluator and coordinator once via `setWiring(...)`.
+4. Register underwriters via `registerUnderwriter(...)` and set their recipients via `setUnderwriterRecipients(...)`.
+5. Create an ACP job with `hook = UnderwritingHook` and `evaluator = settlement/UnderwritingEvaluator.sol`.
+6. Commit underwriting terms during `setBudget(...)`.
+7. Fund the ACP job, then call `orchestrateFunding(...)` with the matching `UnderwritePermit`. Premium is paid immediately to the underwriter's `premiumRecipient`; collateral is locked in the collateral manager; funded principal is released to the merchant execution wallet.
+8. Provider submits evidence through ACP before `expiredAt`.
+9. Client confirms inside `clientConfirmationWindowSeconds`, or the underwriter adjudicates after the window with `completeBySig(...)` or `rejectBySig(...)`.
 
 ## Collateral Routing
 
@@ -80,10 +81,10 @@ Close jobs start at `None` and share the parent's settlement identity and escrow
 
 Current checked-in deployment status:
 
-- `script/DeployUnderwritingSharedEnv.s.sol` still deploys the legacy `AgenticCommerceHooked` runtime.
-- Phase 8 rewrites that script to the canonical `@acp` + settlement-side evaluator path described above.
+- `script/DeployUnderwritingSharedEnv.s.sol` deploys the canonical proxied `@acp/AgenticCommerce.sol` runtime.
+- The script whitelists `UnderwritingHook` in ACP and pins `allowedSettlementToken` before wiring the settlement-side evaluator and coordinator.
 
-After the deployment script is rewritten, use `script/DeployUnderwritingSharedEnv.s.sol` to deploy the canonical long-lived runtime and wire it in a single broadcast run. After deployment:
+Use `script/DeployUnderwritingSharedEnv.s.sol` to deploy the canonical long-lived runtime and wire it in a single broadcast run. After deployment:
 
 1. **Register underwriters** via `script/RegisterUnderwriter.s.sol` (hook admin only).
 2. **Configure recipients** via `script/ConfigureUnderwriterRecipients.s.sol` (called by the underwriter).
