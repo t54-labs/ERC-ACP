@@ -2,9 +2,11 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
+import "@acp/IACPHook.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import "../contracts/AgenticCommerce.sol";
 import "../contracts/AgenticCommerceHooked.sol";
-import "../contracts/IACPHook.sol";
 import "./mocks/MockERC20.sol";
 
 error InvalidParentJob();
@@ -52,10 +54,14 @@ interface ITwoPhaseAgenticCommerceHooked {
     function getCloseJobId(uint256 jobId) external view returns (uint256);
 }
 
-contract NoopHook is IACPHook {
+contract NoopHook is ERC165, IACPHook {
     function beforeAction(uint256, bytes4, bytes calldata) external pure override {}
 
     function afterAction(uint256, bytes4, bytes calldata) external pure override {}
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return interfaceId == type(IACPHook).interfaceId || super.supportsInterface(interfaceId);
+    }
 }
 
 contract AgenticCommerceTwoPhaseTest is Test {

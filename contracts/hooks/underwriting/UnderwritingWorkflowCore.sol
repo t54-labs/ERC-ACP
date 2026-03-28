@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "../../AgenticCommerceHooked.sol";
+import "@acp/AgenticCommerce.sol";
 import "./UnderwritingTypes.sol";
 
 /**
@@ -24,10 +24,12 @@ abstract contract UnderwritingWorkflowCore {
     error ParentMismatch();
     error EvidenceMismatch();
     error InvalidState();
+    error UnsupportedSettlementToken();
 
     mapping(address => bool) internal registeredUnderwriterByAddress;
     mapping(uint256 => UnderwritingTypes.UnderwriteCommit) internal commits;
     mapping(uint256 => bytes32) internal commitHashByJobId;
+    mapping(uint256 => address) internal committedPaymentTokenByJobId;
     mapping(uint256 => uint256) internal committedBudgetByJobId;
     mapping(uint256 => bool) internal awaitingCloseByJobId;
     mapping(uint256 => uint256) internal parentJobIdByCloseJobId;
@@ -101,21 +103,25 @@ abstract contract UnderwritingWorkflowCore {
 
     /// @dev Validates and stores the underwriting commit during `setBudget`.
     function _preSetBudgetWorkflow(
-        AgenticCommerceHooked acp,
+        AgenticCommerce acp,
         address expectedEvaluator,
+        address allowedSettlementToken,
         uint256 jobId,
+        address paymentToken,
         uint256 amount,
         bytes memory optParams
     ) internal {
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
         UnderwritingTypes.UnderwriteCommit memory commit = abi.decode(optParams, (UnderwritingTypes.UnderwriteCommit));
         bytes32 newCommitHash = keccak256(abi.encode(commit));
 
         if (job.provider == address(0)) revert ProviderRequired();
         if (job.evaluator != expectedEvaluator) revert EvaluatorMismatch();
+        if (allowedSettlementToken != address(0) && paymentToken != allowedSettlementToken) revert UnsupportedSettlementToken();
 
         if (commitHashByJobId[jobId] != bytes32(0)) {
             if (commitHashByJobId[jobId] != newCommitHash) revert CommitLocked();
+            if (committedPaymentTokenByJobId[jobId] != paymentToken) revert CommitLocked();
             if (committedBudgetByJobId[jobId] != amount) revert CommitLocked();
             return;
         }
@@ -132,13 +138,14 @@ abstract contract UnderwritingWorkflowCore {
         }
 
         commitHashByJobId[jobId] = newCommitHash;
+        committedPaymentTokenByJobId[jobId] = paymentToken;
         committedBudgetByJobId[jobId] = amount;
         commits[jobId] = commit;
         sidecarStateByJobId[jobId] = UnderwritingTypes.SidecarState.Committed;
     }
 
     /// @dev Ensures a committed underwriting job is ready for ACP funding.
-    function _preFundWorkflow(AgenticCommerceHooked acp, uint256 jobId) internal view {
+    function _preFundWorkflow(AgenticCommerce acp, uint256 jobId) internal view {
         UnderwritingTypes.UnderwriteCommit memory commit = _requireCommit(jobId);
         if (sidecarStateByJobId[jobId] != UnderwritingTypes.SidecarState.Committed) revert InvalidState();
         if (commit.parentJobId != 0) _assertParentReadyForClose(acp, commit.parentJobId);
@@ -158,7 +165,7 @@ abstract contract UnderwritingWorkflowCore {
     }
 
     /// @dev Ensures a protected underwriting job is ready for submission.
-    function _preSubmitWorkflow(AgenticCommerceHooked acp, uint256 jobId) internal view {
+    function _preSubmitWorkflow(AgenticCommerce acp, uint256 jobId) internal view {
         UnderwritingTypes.UnderwriteCommit memory commit = _requireCommit(jobId);
         if (sidecarStateByJobId[jobId] != UnderwritingTypes.SidecarState.Protected) revert InvalidState();
         if (commit.parentJobId != 0) _assertParentReadyForClose(acp, commit.parentJobId);
@@ -181,16 +188,16 @@ abstract contract UnderwritingWorkflowCore {
     }
 
     /// @dev Ensures signed completion or rejection decisions execute from the correct sidecar state.
-    function _preDecisionWorkflow(AgenticCommerceHooked acp, uint256 jobId) internal view {
+    function _preDecisionWorkflow(AgenticCommerce acp, uint256 jobId) internal view {
         UnderwritingTypes.UnderwriteCommit memory commit = _requireCommit(jobId);
         if (sidecarStateByJobId[jobId] != UnderwritingTypes.SidecarState.EvidenceSubmitted) revert InvalidState();
         if (commit.parentJobId != 0) _assertParentReadyForClose(acp, commit.parentJobId);
     }
 
     /// @dev Allows client-side open-job rejects while routing funded/submitted jobs through decision validation.
-    function _preRejectWorkflow(AgenticCommerceHooked acp, uint256 jobId) internal view {
-        AgenticCommerceHooked.Job memory job = acp.getJob(jobId);
-        if (job.status == AgenticCommerceHooked.JobStatus.Open) return;
+    function _preRejectWorkflow(AgenticCommerce acp, uint256 jobId) internal view {
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        if (job.status == AgenticCommerce.JobStatus.Open) return;
         _preDecisionWorkflow(acp, jobId);
     }
 
@@ -229,13 +236,13 @@ abstract contract UnderwritingWorkflowCore {
 
     /// @dev Verifies that a close-job commit is consistent with its parent job and commit.
     function _validateCloseCommit(
-        AgenticCommerceHooked acp,
+        AgenticCommerce acp,
         uint256 jobId,
-        AgenticCommerceHooked.Job memory job,
+        AgenticCommerce.Job memory job,
         UnderwritingTypes.UnderwriteCommit memory commit
     ) internal view {
         UnderwritingTypes.UnderwriteCommit memory parentCommit = commits[commit.parentJobId];
-        AgenticCommerceHooked.Job memory parentJob = acp.getJob(commit.parentJobId);
+        AgenticCommerce.Job memory parentJob = acp.getJob(commit.parentJobId);
         uint256 activeCloseJobId = activeCloseJobIdByParentJobId[commit.parentJobId];
 
         if (commitHashByJobId[commit.parentJobId] == bytes32(0)) revert ParentNotCommitted();
@@ -254,10 +261,10 @@ abstract contract UnderwritingWorkflowCore {
     }
 
     /// @dev Ensures a parent job is completed and explicitly awaiting a close leg.
-    function _assertParentReadyForClose(AgenticCommerceHooked acp, uint256 parentJobId) internal view {
-        AgenticCommerceHooked.Job memory parentJob = acp.getJob(parentJobId);
+    function _assertParentReadyForClose(AgenticCommerce acp, uint256 parentJobId) internal view {
+        AgenticCommerce.Job memory parentJob = acp.getJob(parentJobId);
         if (
-            parentJob.status != AgenticCommerceHooked.JobStatus.Completed
+            parentJob.status != AgenticCommerce.JobStatus.Completed
                 || !awaitingCloseByJobId[parentJobId]
                 || sidecarStateByJobId[parentJobId] != UnderwritingTypes.SidecarState.AwaitingClose
         ) {
@@ -266,14 +273,14 @@ abstract contract UnderwritingWorkflowCore {
     }
 
     /// @dev Clears active close linkage once the tracked close job has reached a terminal state.
-    function _clearStaleCloseIfTerminal(AgenticCommerceHooked acp, uint256 parentJobId) internal {
+    function _clearStaleCloseIfTerminal(AgenticCommerce acp, uint256 parentJobId) internal {
         uint256 activeCloseJobId = activeCloseJobIdByParentJobId[parentJobId];
         if (activeCloseJobId == 0) return;
 
-        AgenticCommerceHooked.Job memory activeCloseJob = acp.getJob(activeCloseJobId);
+        AgenticCommerce.Job memory activeCloseJob = acp.getJob(activeCloseJobId);
         if (
-            activeCloseJob.status == AgenticCommerceHooked.JobStatus.Rejected
-                || activeCloseJob.status == AgenticCommerceHooked.JobStatus.Expired
+            activeCloseJob.status == AgenticCommerce.JobStatus.Rejected
+                || activeCloseJob.status == AgenticCommerce.JobStatus.Expired
         ) {
             delete activeCloseJobIdByParentJobId[parentJobId];
         }

@@ -2,14 +2,20 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
+import "@acp/IACPHook.sol";
+import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import "../contracts/AgenticCommerceHooked.sol";
-import "../contracts/IACPHook.sol";
 import "./mocks/MockERC20.sol";
 
 /// @dev Minimal no-op hook so that jobs have hook != address(0).
-contract NoOpHook is IACPHook {
+contract NoOpHook is ERC165, IACPHook {
     function beforeAction(uint256, bytes4, bytes calldata) external override {}
     function afterAction(uint256, bytes4, bytes calldata) external override {}
+
+    function supportsInterface(bytes4 interfaceId) public view virtual override(ERC165, IERC165) returns (bool) {
+        return interfaceId == type(IACPHook).interfaceId || super.supportsInterface(interfaceId);
+    }
 }
 
 /// @title AgenticCommerceHookedUnderwritingExpiryTest

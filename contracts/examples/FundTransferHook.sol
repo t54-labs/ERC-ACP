@@ -88,7 +88,7 @@ contract FundTransferHook is BaseACPHook {
     // -------------------------------------------------------------------------
 
     /// @dev Store transfer commitment from setBudget optParams.
-    function _preSetBudget(uint256 jobId, uint256, bytes memory optParams) internal override {
+    function _preSetBudget(uint256 jobId, address, address, uint256, bytes memory optParams) internal override {
         if (optParams.length == 0) return;
         (address buyer, uint256 transferAmount) = abi.decode(optParams, (address, uint256));
         if (buyer == address(0)) revert ZeroAddress();
@@ -101,7 +101,7 @@ contract FundTransferHook is BaseACPHook {
     }
 
     /// @dev Verify client has approved this hook for the committed transferAmount.
-    function _preFund(uint256 jobId, bytes memory) internal override {
+    function _preFund(uint256 jobId, address, bytes memory) internal override {
         TransferCommitment memory c = commitments[jobId];
         if (c.buyer == address(0)) revert CommitmentNotSet();
         address client = _getJobClient(jobId);
@@ -110,7 +110,7 @@ contract FundTransferHook is BaseACPHook {
     }
 
     /// @dev Pull transferAmount from client and forward to provider (capital).
-    function _postFund(uint256 jobId, bytes memory) internal override {
+    function _postFund(uint256 jobId, address, bytes memory) internal override {
         TransferCommitment memory c = commitments[jobId];
         address client = _getJobClient(jobId);
         (address provider,) = _getJobProviderAndStatus(jobId);
@@ -118,7 +118,7 @@ contract FundTransferHook is BaseACPHook {
     }
 
     /// @dev Pull transferAmount from provider into hook escrow (output tokens).
-    function _preSubmit(uint256 jobId, bytes32, bytes memory) internal override {
+    function _preSubmit(uint256 jobId, address, bytes32, bytes memory) internal override {
         TransferCommitment storage c = commitments[jobId];
         if (c.buyer == address(0)) revert CommitmentNotSet();
         if (c.providerDeposited) revert AlreadyDeposited();
@@ -128,7 +128,7 @@ contract FundTransferHook is BaseACPHook {
     }
 
     /// @dev Release escrowed tokens to buyer after evaluator completes the job.
-    function _postComplete(uint256 jobId, bytes32, bytes memory) internal override {
+    function _postComplete(uint256 jobId, address, bytes32, bytes memory) internal override {
         TransferCommitment memory c = commitments[jobId];
         if (!c.providerDeposited) revert NotDeposited();
         delete commitments[jobId];
@@ -136,7 +136,7 @@ contract FundTransferHook is BaseACPHook {
     }
 
     /// @dev Return escrowed tokens to provider on rejection.
-    function _postReject(uint256 jobId, bytes32, bytes memory) internal override {
+    function _postReject(uint256 jobId, address, bytes32, bytes memory) internal override {
         TransferCommitment memory c = commitments[jobId];
         if (!c.providerDeposited) {
             delete commitments[jobId];
@@ -188,9 +188,35 @@ contract FundTransferHook is BaseACPHook {
             abi.encodeWithSignature("getJob(uint256)", jobId)
         );
         require(ok, "getJob failed");
-        // Job struct: (id, client, provider, evaluator, hook, description, budget, expiredAt, status)
-        (,, provider,,,,,, status) = abi.decode(
-            data, (uint256, address, address, address, address, string, uint256, uint256, uint8)
+        (
+            uint256 decodedJobId,
+            address decodedClient,
+            address decodedProvider,
+            address decodedEvaluator,
+            string memory decodedDescription,
+            uint256 decodedBudget,
+            uint256 decodedExpiredAt,
+            uint8 decodedStatus,
+            address decodedHook,
+            address decodedPaymentToken,
+            uint256 decodedProviderAgentId,
+            uint256 decodedSubmittedAt
+        ) = abi.decode(
+            data, (uint256, address, address, address, string, uint256, uint256, uint8, address, address, uint256, uint256)
         );
+
+        decodedJobId;
+        decodedClient;
+        decodedEvaluator;
+        decodedDescription;
+        decodedBudget;
+        decodedExpiredAt;
+        decodedHook;
+        decodedPaymentToken;
+        decodedProviderAgentId;
+        decodedSubmittedAt;
+
+        provider = decodedProvider;
+        status = decodedStatus;
     }
 }

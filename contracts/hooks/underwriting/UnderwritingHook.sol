@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "../../AgenticCommerceHooked.sol";
+import "@acp/AgenticCommerce.sol";
 import "../../BaseACPHook.sol";
 import "./IUnderwritingHookView.sol";
 import "./UnderwritingTypes.sol";
@@ -36,10 +36,11 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
     error WiringIncomplete();
     error InvalidWiring();
 
-    AgenticCommerceHooked public immutable acp;
+    AgenticCommerce public immutable acp;
     address public immutable admin;
     address public evaluator;
     address public coordinator;
+    address public allowedSettlementToken;
 
     modifier onlyAdmin() {
         if (msg.sender != admin) revert OnlyAdmin();
@@ -56,7 +57,7 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
     /// @param admin_ The address allowed to wire dependencies and manage underwriters.
     constructor(address acpContract_, address admin_) BaseACPHook(acpContract_) {
         if (admin_ == address(0)) revert ZeroAddress();
-        acp = AgenticCommerceHooked(acpContract_);
+        acp = AgenticCommerce(acpContract_);
         admin = admin_;
     }
 
@@ -78,6 +79,13 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
     /// @param underwriter The underwriter address to register.
     function registerUnderwriter(address underwriter) external onlyAdmin {
         _registerUnderwriter(underwriter);
+    }
+
+    /// @notice Sets the only payment token currently allowed for protected underwriting jobs.
+    /// @param allowedSettlementToken_ The settlement token address allowed during commit locking.
+    function setAllowedSettlementToken(address allowedSettlementToken_) external onlyAdmin {
+        if (allowedSettlementToken_ == address(0)) revert ZeroAddress();
+        allowedSettlementToken = allowedSettlementToken_;
     }
 
     /// @notice Unregisters an underwriter from future standalone commitments.
@@ -140,48 +148,51 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
     }
 
     /// @dev Validates and stores an underwriting commit during `setBudget`.
-    function _preSetBudget(uint256 jobId, uint256 amount, bytes memory optParams) internal override {
+    function _preSetBudget(uint256 jobId, address, address paymentToken, uint256 amount, bytes memory optParams)
+        internal
+        override
+    {
         _requireWiring();
-        _preSetBudgetWorkflow(acp, evaluator, jobId, amount, optParams);
+        _preSetBudgetWorkflow(acp, evaluator, allowedSettlementToken, jobId, paymentToken, amount, optParams);
     }
 
     /// @dev Ensures a committed underwriting job is ready to be funded.
-    function _preFund(uint256 jobId, bytes memory) internal view override {
+    function _preFund(uint256 jobId, address, bytes memory) internal view override {
         _preFundWorkflow(acp, jobId);
     }
 
     /// @dev Marks a funded underwriting job as fee-escrowed.
-    function _postFund(uint256 jobId, bytes memory) internal override {
+    function _postFund(uint256 jobId, address, bytes memory) internal override {
         _postFundWorkflow(jobId);
     }
 
     /// @dev Ensures a protected underwriting job is ready to be submitted.
-    function _preSubmit(uint256 jobId, bytes32, bytes memory) internal view override {
+    function _preSubmit(uint256 jobId, address, bytes32, bytes memory) internal view override {
         _preSubmitWorkflow(acp, jobId);
     }
 
     /// @dev Validates submitted evidence against the stored underwriting commit.
-    function _postSubmit(uint256 jobId, bytes32 deliverable, bytes memory optParams) internal override {
+    function _postSubmit(uint256 jobId, address, bytes32 deliverable, bytes memory optParams) internal override {
         _postSubmitWorkflow(jobId, deliverable, optParams);
     }
 
     /// @dev Transitions successful jobs into close-awaiting or success-pending state.
-    function _postComplete(uint256 jobId, bytes32, bytes memory) internal override {
+    function _postComplete(uint256 jobId, address, bytes32, bytes memory) internal override {
         _postCompleteWorkflow(jobId);
     }
 
     /// @dev Ensures complete decisions only execute from the valid underwriting state.
-    function _preComplete(uint256 jobId, bytes32, bytes memory) internal view override {
+    function _preComplete(uint256 jobId, address, bytes32, bytes memory) internal view override {
         _preDecisionWorkflow(acp, jobId);
     }
 
     /// @dev Ensures reject decisions only execute from the valid underwriting state.
-    function _preReject(uint256 jobId, bytes32, bytes memory) internal view override {
+    function _preReject(uint256 jobId, address, bytes32, bytes memory) internal view override {
         _preRejectWorkflow(acp, jobId);
     }
 
     /// @dev Finalizes hook-side state for rejected jobs.
-    function _postReject(uint256 jobId, bytes32, bytes memory) internal override {
+    function _postReject(uint256 jobId, address, bytes32, bytes memory) internal override {
         _postRejectWorkflow(jobId);
     }
 

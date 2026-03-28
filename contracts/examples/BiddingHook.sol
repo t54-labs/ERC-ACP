@@ -75,7 +75,7 @@ contract BiddingHook is BaseACPHook {
     /// @dev Two modes:
     ///  1. Initial call (before provider): decode deadline from optParams, store it.
     ///  2. Post-provider call (committedAmount set): enforce budget == committedAmount.
-    function _preSetBudget(uint256 jobId, uint256 amount, bytes memory optParams) internal override {
+    function _preSetBudget(uint256 jobId, address, address, uint256 amount, bytes memory optParams) internal override {
         Bidding storage b = biddings[jobId];
 
         // After provider selected: enforce budget matches the winning bid
@@ -110,7 +110,7 @@ contract BiddingHook is BaseACPHook {
     }
 
     /// @dev Block funding if budget hasn't been set to the committed bid amount.
-    function _preFund(uint256 jobId, bytes memory) internal override {
+    function _preFund(uint256 jobId, address, bytes memory) internal override {
         Bidding storage b = biddings[jobId];
         if (b.committedAmount == 0) return; // no bidding for this job
         uint256 budget = _getJobBudget(jobId);
@@ -130,9 +130,9 @@ contract BiddingHook is BaseACPHook {
             abi.encodeWithSignature("getJob(uint256)", jobId)
         );
         require(ok, "getJob failed");
-        // Job struct: (id, client, provider, evaluator, hook, description, budget, expiredAt, status)
-        (,,,,,, budget,,) = abi.decode(
-            data, (uint256, address, address, address, address, string, uint256, uint256, uint8)
+        // Job struct: (id, client, provider, evaluator, description, budget, expiredAt, status, hook, paymentToken, providerAgentId, submittedAt)
+        (,,,,, budget,,,,,,) = abi.decode(
+            data, (uint256, address, address, address, string, uint256, uint256, uint8, address, address, uint256, uint256)
         );
     }
 }
