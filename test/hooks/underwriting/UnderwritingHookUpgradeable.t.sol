@@ -203,6 +203,32 @@ contract UnderwritingHookUpgradeableTest is Test {
         assertEq(dai.balanceOf(address(acp)), JOB_BUDGET);
     }
 
+    function testPlainSubmittedJobClaimRefundRevertsDuringGracePeriod() public {
+        uint256 jobId = _createPlainSubmittedJob(block.timestamp + 6 minutes);
+
+        vm.warp(acp.getJob(jobId).expiredAt + 1);
+
+        vm.prank(client);
+        vm.expectRevert(AgenticCommerce.GracePeriodActive.selector);
+        acp.claimRefund(jobId);
+    }
+
+    function testPlainSubmittedJobClaimRefundSucceedsAfterGracePeriod() public {
+        uint256 jobId = _createPlainSubmittedJob(block.timestamp + 6 minutes);
+        AgenticCommerce.Job memory submittedJob = acp.getJob(jobId);
+
+        vm.warp(submittedJob.submittedAt + acp.EVALUATION_GRACE_PERIOD() + 1);
+
+        uint256 clientBalanceBefore = usdc.balanceOf(client);
+
+        vm.prank(client);
+        acp.claimRefund(jobId);
+
+        AgenticCommerce.Job memory expiredJob = acp.getJob(jobId);
+        assertEq(uint256(expiredJob.status), uint256(AgenticCommerce.JobStatus.Expired));
+        assertEq(usdc.balanceOf(client), clientBalanceBefore + JOB_BUDGET);
+    }
+
     function _commit() internal view returns (UnderwritingTypes.UnderwriteCommit memory) {
         return UnderwritingTypes.UnderwriteCommit({
             parentJobId: 0,
@@ -228,5 +254,18 @@ contract UnderwritingHookUpgradeableTest is Test {
             abi.encodeWithSignature("initialize(address,address)", address(acp), admin_)
         );
         return IUpgradeableUnderwritingHook(address(proxy));
+    }
+
+    function _createPlainSubmittedJob(uint256 expiredAt_) internal returns (uint256 jobId) {
+        vm.prank(client);
+        jobId = acp.createJob(provider, address(evaluator), expiredAt_, "plain submitted refund job", address(0), 0);
+
+        vm.startPrank(client);
+        acp.setBudget(jobId, address(usdc), JOB_BUDGET, bytes(""));
+        acp.fund(jobId, JOB_BUDGET, bytes(""));
+        vm.stopPrank();
+
+        vm.prank(provider);
+        acp.submit(jobId, keccak256("submitted deliverable"), bytes(""));
     }
 }
