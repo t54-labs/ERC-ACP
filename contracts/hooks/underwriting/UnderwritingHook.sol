@@ -2,6 +2,9 @@
 pragma solidity ^0.8.20;
 
 import "@acp/AgenticCommerce.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "../../BaseACPHook.sol";
 import "./IUnderwritingHookView.sol";
 import "./UnderwritingTypes.sol";
@@ -29,42 +32,51 @@ interface IUnderwritingSettlementCoordinatorTarget is IUnderwritingWiringTarget 
  * @dev The hook owns workflow legitimacy while delegating settlement-side economics
  *      to a coordinator and signed decision execution to an evaluator.
  */
-contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWorkflowCore {
-    error OnlyAdmin();
+contract UnderwritingHook is Initializable, AccessControlUpgradeable, UUPSUpgradeable, BaseACPHook, IUnderwritingHookView, UnderwritingWorkflowCore {
     error OnlyCoordinator();
     error WiringAlreadySet();
     error WiringIncomplete();
     error InvalidWiring();
 
-    AgenticCommerce public immutable acp;
-    address public immutable admin;
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
+
+    AgenticCommerce public acp;
+    address public admin;
     address public evaluator;
     address public coordinator;
     address public allowedSettlementToken;
-
-    modifier onlyAdmin() {
-        if (msg.sender != admin) revert OnlyAdmin();
-        _;
-    }
 
     modifier onlyCoordinator() {
         if (msg.sender != coordinator) revert OnlyCoordinator();
         _;
     }
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     /// @notice Deploys the underwriting hook for a specific ACP contract and admin.
     /// @param acpContract_ The hooked ACP contract address.
     /// @param admin_ The address allowed to wire dependencies and manage underwriters.
-    constructor(address acpContract_, address admin_) BaseACPHook(acpContract_) {
+    function initialize(address acpContract_, address admin_) external initializer {
         if (admin_ == address(0)) revert ZeroAddress();
+
+        __AccessControl_init();
+        _initializeBaseACPHook(acpContract_);
+
         acp = AgenticCommerce(acpContract_);
         admin = admin_;
+        _grantRole(DEFAULT_ADMIN_ROLE, admin_);
+        _grantRole(ADMIN_ROLE, admin_);
+        _grantRole(UPGRADER_ROLE, admin_);
     }
 
     /// @notice Wires the hook to its evaluator and coordinator exactly once.
     /// @param evaluator_ The evaluator that will execute signed decisions.
     /// @param coordinator_ The coordinator that will advance protected settlements.
-    function setWiring(address evaluator_, address coordinator_) external onlyAdmin {
+    function setWiring(address evaluator_, address coordinator_) external onlyRole(ADMIN_ROLE) {
         if (evaluator != address(0) || coordinator != address(0)) revert WiringAlreadySet();
         if (evaluator_ == address(0) || coordinator_ == address(0)) revert ZeroAddress();
 
@@ -77,20 +89,20 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
 
     /// @notice Registers an underwriter that may author new standalone commitments.
     /// @param underwriter The underwriter address to register.
-    function registerUnderwriter(address underwriter) external onlyAdmin {
+    function registerUnderwriter(address underwriter) external onlyRole(ADMIN_ROLE) {
         _registerUnderwriter(underwriter);
     }
 
     /// @notice Sets the only payment token currently allowed for protected underwriting jobs.
     /// @param allowedSettlementToken_ The settlement token address allowed during commit locking.
-    function setAllowedSettlementToken(address allowedSettlementToken_) external onlyAdmin {
+    function setAllowedSettlementToken(address allowedSettlementToken_) external onlyRole(ADMIN_ROLE) {
         if (allowedSettlementToken_ == address(0)) revert ZeroAddress();
         allowedSettlementToken = allowedSettlementToken_;
     }
 
     /// @notice Unregisters an underwriter from future standalone commitments.
     /// @param underwriter The underwriter address to unregister.
-    function unregisterUnderwriter(address underwriter) external onlyAdmin {
+    function unregisterUnderwriter(address underwriter) external onlyRole(ADMIN_ROLE) {
         _unregisterUnderwriter(underwriter);
     }
 
@@ -139,6 +151,15 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
     /// @inheritdoc IUnderwritingHookView
     function jobSubmittedAt(uint256 jobId) external view returns (uint64) {
         return _getSubmittedAt(jobId);
+    }
+
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        override(AccessControlUpgradeable, BaseACPHook)
+        returns (bool)
+    {
+        return super.supportsInterface(interfaceId);
     }
 
     /// @notice Marks a funded underwriting job as protected after settlement orchestration.
@@ -230,5 +251,9 @@ contract UnderwritingHook is BaseACPHook, IUnderwritingHookView, UnderwritingWor
             revert InvalidWiring();
         }
     }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}
+
+    uint256[44] private __gap;
 
 }

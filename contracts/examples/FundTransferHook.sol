@@ -78,7 +78,8 @@ contract FundTransferHook is BaseACPHook {
     /// @notice Deploys the fund-transfer hook for a specific token and ACP contract.
     /// @param token_ The ERC20 token transferred as capital and output.
     /// @param acpContract_ The hooked ACP contract address.
-    constructor(address token_, address acpContract_) BaseACPHook(acpContract_) {
+    constructor(address token_, address acpContract_) {
+        _initializeBaseACPHook(acpContract_);
         if (token_ == address(0)) revert ZeroAddress();
         token = IERC20(token_);
     }
@@ -101,7 +102,7 @@ contract FundTransferHook is BaseACPHook {
     }
 
     /// @dev Verify client has approved this hook for the committed transferAmount.
-    function _preFund(uint256 jobId, address, bytes memory) internal override {
+    function _preFund(uint256 jobId, address, bytes memory) internal view override {
         TransferCommitment memory c = commitments[jobId];
         if (c.buyer == address(0)) revert CommitmentNotSet();
         address client = _getJobClient(jobId);

@@ -26,16 +26,20 @@ import "@openzeppelin/contracts/utils/introspection/ERC165.sol";
  *
  *      Example:
  *          contract MyHook is BaseACPHook {
- *              constructor(address acp) BaseACPHook(acp) {}
+ *              constructor(address acp) {
+ *                  _initializeBaseACPHook(acp);
+ *              }
  *              function _postFund(uint256 jobId, bytes memory optParams) internal override {
  *                  // custom logic after fund
  *              }
  *          }
  */
 abstract contract BaseACPHook is ERC165, IACPHook {
-    address public immutable acpContract;
+    address public acpContract;
 
     error OnlyACPContract();
+    error ACPContractAlreadySet();
+    error ZeroACPContractAddress();
 
     modifier onlyACP() {
         if (msg.sender != acpContract) revert OnlyACPContract();
@@ -44,7 +48,9 @@ abstract contract BaseACPHook is ERC165, IACPHook {
 
     /// @notice Stores the ACP contract allowed to call the hook callbacks.
     /// @param acpContract_ The hooked ACP contract address.
-    constructor(address acpContract_) {
+    function _initializeBaseACPHook(address acpContract_) internal {
+        if (acpContract_ == address(0)) revert ZeroACPContractAddress();
+        if (acpContract != address(0)) revert ACPContractAlreadySet();
         acpContract = acpContract_;
     }
 

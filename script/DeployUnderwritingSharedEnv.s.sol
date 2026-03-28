@@ -26,7 +26,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  * Deploy order:
  *   1. AgenticCommerce implementation + proxy
  *   2. UnderwritingCollateralManager
- *   3. UnderwritingHook
+ *   3. UnderwritingHook implementation + proxy
  *   4. Whitelist hook + pin settlement token
  *   5. UnderwritingSettlementCoordinator
  *   6. UnderwritingEvaluator
@@ -55,8 +55,11 @@ contract DeployUnderwritingSharedEnv is Script {
         // 2. Collateral manager
         UnderwritingCollateralManager manager = new UnderwritingCollateralManager(IERC20(usdc));
 
-        // 3. Underwriting hook (admin = deployer = msg.sender)
-        UnderwritingHook hook = new UnderwritingHook(address(acp), msg.sender);
+        // 3. Underwriting hook implementation + proxy (admin = deployer = msg.sender)
+        UnderwritingHook hookImplementation = new UnderwritingHook();
+        ERC1967Proxy hookProxy =
+            new ERC1967Proxy(address(hookImplementation), abi.encodeCall(UnderwritingHook.initialize, (address(acp), msg.sender)));
+        UnderwritingHook hook = UnderwritingHook(address(hookProxy));
 
         // 4. Whitelist hook + pin the settlement token before any protected jobs are created
         acp.setHookWhitelist(address(hook), true);
@@ -84,6 +87,7 @@ contract DeployUnderwritingSharedEnv is Script {
         // Log deployed addresses for operator reference
         console.log("ACP implementation: ", address(acpImplementation));
         console.log("ACP proxy:          ", address(acp));
+        console.log("Hook implementation:", address(hookImplementation));
         console.log("CollateralManager:  ", address(manager));
         console.log("UnderwritingHook:   ", address(hook));
         console.log("Coordinator:        ", address(coordinator));

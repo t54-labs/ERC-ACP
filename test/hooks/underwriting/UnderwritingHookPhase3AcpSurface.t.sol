@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import "../../../contracts/BaseACPHook.sol";
 import "../../../contracts/hooks/underwriting/UnderwritingHook.sol";
@@ -74,7 +75,9 @@ contract RecordingBaseACPHook is BaseACPHook {
     uint256 public lastAmount;
     bytes public lastOptParams;
 
-    constructor(address acpContract_) BaseACPHook(acpContract_) {}
+    constructor(address acpContract_) {
+        _initializeBaseACPHook(acpContract_);
+    }
 
     function _preSetBudget(
         uint256,
@@ -110,7 +113,7 @@ contract UnderwritingHookPhase3AcpSurfaceTest is Test {
         acp = new MockPhase3AcpCaller();
         recordingHook = new RecordingBaseACPHook(address(acp));
 
-        hook = new UnderwritingHook(address(acp), address(this));
+        hook = _deployHook(address(acp), address(this));
         evaluator = new MockPhase3WiringTarget(address(acp), address(hook));
         coordinator = new MockPhase3CoordinatorTarget(address(acp), address(hook));
 
@@ -177,7 +180,7 @@ contract UnderwritingHookPhase3AcpSurfaceTest is Test {
     }
 
     function test_underwritingHook_beforeAction_setBudget_requiresSettlementTokenConfiguration() public {
-        UnderwritingHook unconfiguredHook = new UnderwritingHook(address(acp), address(this));
+        UnderwritingHook unconfiguredHook = _deployHook(address(acp), address(this));
         MockPhase3WiringTarget unconfiguredEvaluator = new MockPhase3WiringTarget(address(acp), address(unconfiguredHook));
         MockPhase3CoordinatorTarget unconfiguredCoordinator =
             new MockPhase3CoordinatorTarget(address(acp), address(unconfiguredHook));
@@ -221,5 +224,12 @@ contract UnderwritingHookPhase3AcpSurfaceTest is Test {
             termsHash: keccak256("terms"),
             allowCloseJob: false
         });
+    }
+
+    function _deployHook(address acp_, address admin_) internal returns (UnderwritingHook) {
+        UnderwritingHook implementation = new UnderwritingHook();
+        ERC1967Proxy proxy =
+            new ERC1967Proxy(address(implementation), abi.encodeCall(UnderwritingHook.initialize, (acp_, admin_)));
+        return UnderwritingHook(address(proxy));
     }
 }

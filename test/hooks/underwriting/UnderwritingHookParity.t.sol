@@ -56,7 +56,7 @@ contract UnderwritingHookParityTest is Test {
 
         usdc = new MockERC20("Mock USDC", "mUSDC");
         acp = _deployAcp(treasury);
-        hook = new UnderwritingHook(address(acp), address(this));
+        hook = _deployHook(address(acp), address(this));
         acp.setHookWhitelist(address(hook), true);
         hook.setAllowedSettlementToken(address(usdc));
         evaluator = new UnderwritingEvaluator(address(acp), address(hook));
@@ -71,7 +71,7 @@ contract UnderwritingHookParityTest is Test {
     }
 
     function testSetWiringRejectsDeprecatedHookOnlyCoordinator() public {
-        UnderwritingHook secondHook = new UnderwritingHook(address(acp), address(this));
+        UnderwritingHook secondHook = _deployHook(address(acp), address(this));
         acp.setHookWhitelist(address(secondHook), true);
         secondHook.setAllowedSettlementToken(address(usdc));
         UnderwritingEvaluator secondEvaluator = new UnderwritingEvaluator(address(acp), address(secondHook));
@@ -251,5 +251,12 @@ contract UnderwritingHookParityTest is Test {
         AgenticCommerce implementation = new AgenticCommerce();
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), abi.encodeCall(AgenticCommerce.initialize, (treasury_)));
         return AgenticCommerce(address(proxy));
+    }
+
+    function _deployHook(address acp_, address admin_) internal returns (UnderwritingHook) {
+        UnderwritingHook implementation = new UnderwritingHook();
+        ERC1967Proxy proxy =
+            new ERC1967Proxy(address(implementation), abi.encodeCall(UnderwritingHook.initialize, (acp_, admin_)));
+        return UnderwritingHook(address(proxy));
     }
 }

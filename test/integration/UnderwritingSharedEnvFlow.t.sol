@@ -84,7 +84,7 @@ contract UnderwritingSharedEnvFlowTest is Test {
 
         // Deploy underwriting stack manually so we control CLIENT_CONFIRM_WINDOW
         // admin = address(this) so we can call registerUnderwriter directly
-        hook = new UnderwritingHook(address(acp), address(this));
+        hook = _deployHook(address(acp), address(this));
         acp.setHookWhitelist(address(hook), true);
         hook.setAllowedSettlementToken(address(usdc));
         coordinator = new UnderwritingSettlementCoordinator(
@@ -779,5 +779,12 @@ contract UnderwritingSharedEnvFlowTest is Test {
         AgenticCommerce implementation = new AgenticCommerce();
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), abi.encodeCall(AgenticCommerce.initialize, (treasury_)));
         return AgenticCommerce(address(proxy));
+    }
+
+    function _deployHook(address acp_, address admin_) internal returns (UnderwritingHook) {
+        UnderwritingHook implementation = new UnderwritingHook();
+        ERC1967Proxy proxy =
+            new ERC1967Proxy(address(implementation), abi.encodeCall(UnderwritingHook.initialize, (acp_, admin_)));
+        return UnderwritingHook(address(proxy));
     }
 }

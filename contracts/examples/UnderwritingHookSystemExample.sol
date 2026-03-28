@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "@acp/AgenticCommerce.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../interfaces/IAgenticCommerceKernel.sol";
 import "../interfaces/ICollateralManager.sol";
 import "../hooks/underwriting/UnderwritingHook.sol";
@@ -83,7 +84,10 @@ contract UnderwritingHookSystemExample {
         collateralManager = collateralManager_;
         owner = msg.sender;
 
-        hook = new UnderwritingHook(address(acp_), address(this));
+        UnderwritingHook hookImplementation = new UnderwritingHook();
+        ERC1967Proxy hookProxy =
+            new ERC1967Proxy(address(hookImplementation), abi.encodeCall(UnderwritingHook.initialize, (address(acp_), address(this))));
+        hook = UnderwritingHook(address(hookProxy));
         hook.setAllowedSettlementToken(settlementToken_);
         coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp_)), hook, collateralManager_

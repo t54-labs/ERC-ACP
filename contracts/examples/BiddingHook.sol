@@ -68,7 +68,9 @@ contract BiddingHook is BaseACPHook {
 
     /// @notice Deploys the bidding hook for a specific ACP contract.
     /// @param acpContract_ The hooked ACP contract address.
-    constructor(address acpContract_) BaseACPHook(acpContract_) {}
+    constructor(address acpContract_) {
+        _initializeBaseACPHook(acpContract_);
+    }
 
     // --- Hook callbacks only (no direct external functions) ---
 
@@ -110,7 +112,7 @@ contract BiddingHook is BaseACPHook {
     }
 
     /// @dev Block funding if budget hasn't been set to the committed bid amount.
-    function _preFund(uint256 jobId, address, bytes memory) internal override {
+    function _preFund(uint256 jobId, address, bytes memory) internal view override {
         Bidding storage b = biddings[jobId];
         if (b.committedAmount == 0) return; // no bidding for this job
         uint256 budget = _getJobBudget(jobId);
