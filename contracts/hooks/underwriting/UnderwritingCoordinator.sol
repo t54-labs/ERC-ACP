@@ -7,9 +7,11 @@ import "./UnderwritingTypes.sol";
 
 /**
  * @title UnderwritingCoordinator
- * @notice Minimal coordinator that advances funded underwriting jobs into the protected state.
- * @dev This lightweight coordinator predates the full settlement migration and only
- *      marks jobs as protected once ACP funding has succeeded.
+ * @notice Legacy lightweight coordinator retained only for parity tests during the migration.
+ * @dev This contract is not part of the canonical shared-environment or production runtime.
+ *      New migration work should target `contracts/settlement/UnderwritingSettlementCoordinator.sol`.
+ *      This lightweight path predates the settlement stack and only marks jobs as protected
+ *      once ACP funding has succeeded.
  */
 contract UnderwritingCoordinator {
     error ZeroAddress();

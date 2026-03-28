@@ -8,12 +8,25 @@ The underwriting migration splits responsibilities across two layers:
 - `settlement/UnderwritingCollateralManager.sol` owns underwriter payout/recovery routing, permit verification, premium collection, principal release, collateral lock/release, and slashing.
 - `settlement/UnderwritingSettlementEscrow.sol` is the per-settlement token-moving adapter created on demand when funding is orchestrated.
 
-## Typical Flow
+The canonical runtime for the migration is:
 
-1. Deploy all five contracts: `AgenticCommerceHooked`, `UnderwritingCollateralManager`, `UnderwritingHook`, `UnderwritingSettlementCoordinator`, `UnderwritingEvaluator`.
-2. Wire the hook to the evaluator and coordinator once via `setWiring(...)`.
+1. `@acp/AgenticCommerce.sol`
+2. `hooks/underwriting/UnderwritingHook.sol`
+3. `settlement/UnderwritingEvaluator.sol`
+4. `settlement/UnderwritingSettlementCoordinator.sol`
+5. `settlement/UnderwritingCollateralManager.sol`
+6. `settlement/UnderwritingSettlementEscrow.sol`
+
+The lightweight `hooks/underwriting/UnderwritingCoordinator.sol`, `hooks/underwriting/UnderwritingEvaluator.sol`, and `examples/UnderwritingHookSystemExample.sol` paths are legacy migration helpers only and are not part of the canonical shared-environment deployment.
+
+## Target Canonical Flow
+
+This section describes the target runtime shape the migration is converging to. The checked-in `script/DeployUnderwritingSharedEnv.s.sol` still deploys the legacy `AgenticCommerceHooked` path today and will be rewritten in phase 8, so treat the flow below as the canonical destination rather than a claim that the script already matches it.
+
+1. Deploy the long-lived canonical components: `@acp/AgenticCommerce.sol`, `settlement/UnderwritingCollateralManager.sol`, `hooks/underwriting/UnderwritingHook.sol`, `settlement/UnderwritingSettlementCoordinator.sol`, and the settlement-side `settlement/UnderwritingEvaluator.sol`.
+2. Wire the hook to the settlement-side evaluator and coordinator once via `setWiring(...)`.
 3. Register underwriters via `registerUnderwriter(...)` and set their recipients via `setUnderwriterRecipients(...)`.
-4. Create an ACP job with `hook = UnderwritingHook` and `evaluator = UnderwritingEvaluator`.
+4. Create an ACP job with `hook = UnderwritingHook` and `evaluator = settlement/UnderwritingEvaluator.sol`.
 5. Commit underwriting terms during `setBudget(...)`.
 6. Fund the ACP job, then call `orchestrateFunding(...)` with the matching `UnderwritePermit`. Premium is paid immediately to the underwriter's `premiumRecipient`; collateral is locked in the collateral manager; funded principal is released to the merchant execution wallet.
 7. Provider submits evidence through ACP before `expiredAt`.
@@ -65,7 +78,12 @@ Close jobs start at `None` and share the parent's settlement identity and escrow
 
 ## Deployment
 
-Use `script/DeployUnderwritingSharedEnv.s.sol` to deploy all five contracts and wire them in a single broadcast run. After deployment:
+Current checked-in deployment status:
+
+- `script/DeployUnderwritingSharedEnv.s.sol` still deploys the legacy `AgenticCommerceHooked` runtime.
+- Phase 8 rewrites that script to the canonical `@acp` + settlement-side evaluator path described above.
+
+After the deployment script is rewritten, use `script/DeployUnderwritingSharedEnv.s.sol` to deploy the canonical long-lived runtime and wire it in a single broadcast run. After deployment:
 
 1. **Register underwriters** via `script/RegisterUnderwriter.s.sol` (hook admin only).
 2. **Configure recipients** via `script/ConfigureUnderwriterRecipients.s.sol` (called by the underwriter).

@@ -3,7 +3,7 @@
 | Doc | Contract | Description |
 |-----|----------|-------------|
 | [ERC-agentic-commerce](../ERC-agentic-commerce.md) | **acp/contracts/AgenticCommerce.sol** via `@acp/...` | Canonical ACP core for new work. The local `AgenticCommerce.sol` and `AgenticCommerceHooked.sol` files remain temporary migration references until the legacy cleanup phase lands. |
-| [Underwriting Settlement Layer](./settlement/README.md) | **hooks/underwriting/**, **settlement/**, **examples/UnderwritingHookSystemExample.sol** | Canonical underwriting hook integration where the hook owns workflow admission/evidence rules and the settlement layer owns premium, collateral, principal, expiry, and disputes. |
+| [Underwriting Settlement Layer](./settlement/README.md) | **hooks/underwriting/UnderwritingHook.sol**, **settlement/** | Canonical underwriting runtime. The lightweight hook-side `hooks/underwriting/UnderwritingCoordinator.sol`, `hooks/underwriting/UnderwritingEvaluator.sol`, and `examples/UnderwritingHookSystemExample.sol` remain legacy migration helpers and are not part of the production deployment target. |
 
 ## Deployment Scripts
 

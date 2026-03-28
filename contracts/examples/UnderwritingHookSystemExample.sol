@@ -11,9 +11,11 @@ import "../settlement/UnderwritingEvaluator.sol";
 
 /**
  * @title UnderwritingHookSystemExample
- * @notice Example deployment helper that wires the underwriting hook, coordinator, and evaluator together.
- * @dev This contract is intended as reference glue for tests and integrations that
- *      want a ready-made underwriting stack on top of `AgenticCommerceHooked`.
+ * @notice Legacy example helper for tests and local integrations.
+ * @dev This contract is not part of the canonical shared-environment or production deployment path.
+ *      Use `script/DeployUnderwritingSharedEnv.s.sol` for the canonical runtime wiring.
+ *      This helper remains as migration-era glue for tests that want a ready-made underwriting
+ *      stack on top of `AgenticCommerceHooked`.
  */
 contract UnderwritingHookSystemExample {
     error ZeroAddress();

@@ -9,8 +9,10 @@ import "./UnderwritingTypes.sol";
 
 /**
  * @title UnderwritingEvaluator
- * @notice Executes complete and reject decisions signed by the responsible underwriter.
- * @dev The contract validates the ACP job state, enforces EIP-712 signatures, and
+ * @notice Legacy lightweight evaluator retained only for parity coverage during the migration.
+ * @dev This contract is not part of the canonical shared-environment or production runtime.
+ *      New migration work should target `contracts/settlement/UnderwritingEvaluator.sol`.
+ *      The contract validates the ACP job state, enforces EIP-712 signatures, and
  *      consumes one nonce per underwriter decision.
  */
 contract UnderwritingEvaluator is EIP712 {
