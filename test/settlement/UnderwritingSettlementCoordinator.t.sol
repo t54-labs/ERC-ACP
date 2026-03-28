@@ -137,6 +137,7 @@ contract UnderwritingSettlementCoordinatorTest is Test {
     address internal evaluatorAddr = makeAddr("evaluator");
     address internal underwriter = makeAddr("underwriter");
     address internal merchantExecutionWallet = makeAddr("merchantExecutionWallet");
+    address internal otherToken = makeAddr("otherToken");
 
     MockERC20 internal usdc;
     MockCollateralManager internal collateralManager;
@@ -186,6 +187,21 @@ contract UnderwritingSettlementCoordinatorTest is Test {
         assertTrue(collateralManager.releasePrincipalCalled());
         assertEq(usdc.balanceOf(address(collateralManager)), COLLATERAL_AMOUNT + PREMIUM_AMOUNT);
         assertEq(usdc.balanceOf(merchantExecutionWallet), PRINCIPAL_AMOUNT);
+    }
+
+    function testOrchestrateFundingRevertsForUnsupportedSettlementTokenBeforeEscrowCreation() public {
+        address predictedEscrow = vm.computeCreateAddress(address(coordinator), 1);
+
+        hook.seedJob(ROOT_JOB_ID, UnderwritingTypes.SidecarState.FeeEscrowed, _commit(0), ROOT_JOB_ID);
+        acp.setJob(_jobWithToken(ROOT_JOB_ID, IAgenticCommerceKernel.JobStatus.Funded, otherToken));
+
+        vm.expectRevert(UnderwritingSettlementCoordinator.UnsupportedSettlementToken.selector);
+        coordinator.orchestrateFunding(ROOT_JOB_ID, _permit(ROOT_JOB_ID, ROOT_JOB_ID, predictedEscrow), bytes("permit-sig"));
+
+        assertFalse(hook.markProtectedCalled());
+        assertFalse(collateralManager.lockCollateralCalled());
+        assertEq(coordinator.settlementEscrow(ROOT_JOB_ID), address(0));
+        assertEq(uint256(coordinator.jobSettlementState(ROOT_JOB_ID)), uint256(SettlementTypes.SettlementState.None));
     }
 
     function testCloseOrchestrateFundingReusesParentSettlementIdentityWithoutFreshCollateralPull() public {
@@ -346,6 +362,14 @@ contract UnderwritingSettlementCoordinatorTest is Test {
         view
         returns (IAgenticCommerceKernel.Job memory)
     {
+        return _jobWithToken(jobId, status_, acp.paymentToken());
+    }
+
+    function _jobWithToken(uint256 jobId, IAgenticCommerceKernel.JobStatus status_, address paymentToken_)
+        internal
+        view
+        returns (IAgenticCommerceKernel.Job memory)
+    {
         return IAgenticCommerceKernel.Job({
             id: jobId,
             client: client,
@@ -356,7 +380,7 @@ contract UnderwritingSettlementCoordinatorTest is Test {
             expiredAt: block.timestamp + 1 days,
             status: status_,
             hook: address(hook),
-            paymentToken: acp.paymentToken(),
+            paymentToken: paymentToken_,
             providerAgentId: 0,
             submittedAt: 0
         });
