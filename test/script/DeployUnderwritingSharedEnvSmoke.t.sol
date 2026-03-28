@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "forge-std/Test.sol";
 import "@acp/AgenticCommerce.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import "../../script/DeployUnderwritingSharedEnv.s.sol";
 import "../../contracts/hooks/underwriting/UnderwritingHook.sol";
 import "../../contracts/settlement/UnderwritingSettlementCoordinator.sol";
 import "../../contracts/settlement/UnderwritingEvaluator.sol";
@@ -96,25 +97,32 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
 
     function testFreshDeploymentSupportsImmediateHookedJobCreationAndBudgeting() public {
         MockERC20 usdc = new MockERC20("Mock USDC", "mUSDC");
+        uint256 deployerKey = 123_456;
+        address broadcastDeployer = vm.addr(deployerKey);
 
-        vm.startPrank(deployer);
+        vm.deal(broadcastDeployer, 1 ether);
+        vm.setEnv("BASE_USDC", vm.toString(address(usdc)));
+        vm.setEnv("ACP_TREASURY", vm.toString(treasury));
+        vm.setEnv("CLIENT_CONFIRMATION_WINDOW", vm.toString(uint256(CLIENT_CONFIRMATION_WINDOW)));
+        vm.setEnv("PRIVATE_KEY", vm.toString(deployerKey));
 
-        AgenticCommerce acp = _deployAcp(treasury);
-        UnderwritingCollateralManager manager = new UnderwritingCollateralManager(IERC20(address(usdc)));
-        UnderwritingHook hook = _deployHook(address(acp), deployer);
-        acp.setHookWhitelist(address(hook), true);
-        hook.setAllowedSettlementToken(address(usdc));
+        DeployUnderwritingSharedEnv deployScript = new DeployUnderwritingSharedEnv();
+        deployScript.run();
 
-        UnderwritingSettlementCoordinator coordinator = new UnderwritingSettlementCoordinator(
-            IAgenticCommerceKernel(address(acp)), hook, manager
-        );
-        UnderwritingEvaluator evaluator =
-            _deployEvaluator(address(acp), address(hook), CLIENT_CONFIRMATION_WINDOW, deployer);
+        AgenticCommerce acp = AgenticCommerce(deployScript.deployedAcp());
+        UnderwritingCollateralManager manager =
+            UnderwritingCollateralManager(deployScript.deployedCollateralManager());
+        UnderwritingHook hook = UnderwritingHook(deployScript.deployedHook());
+        UnderwritingSettlementCoordinator coordinator =
+            UnderwritingSettlementCoordinator(deployScript.deployedCoordinator());
+        UnderwritingEvaluator evaluator = UnderwritingEvaluator(deployScript.deployedEvaluator());
 
-        hook.setWiring(address(evaluator), address(coordinator));
+        assertEq(hook.admin(), broadcastDeployer);
+        assertEq(evaluator.admin(), broadcastDeployer);
+        assertEq(address(coordinator.collateralManager()), address(manager));
+
+        vm.prank(broadcastDeployer);
         hook.registerUnderwriter(underwriter);
-
-        vm.stopPrank();
 
         vm.prank(client);
         uint256 jobId =

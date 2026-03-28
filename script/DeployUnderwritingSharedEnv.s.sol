@@ -37,6 +37,12 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *     --rpc-url $RPC_URL --broadcast
  */
 contract DeployUnderwritingSharedEnv is Script {
+    address public deployedAcp;
+    address public deployedCollateralManager;
+    address public deployedHook;
+    address public deployedCoordinator;
+    address public deployedEvaluator;
+
     function run() external {
         address usdc = vm.envAddress("BASE_USDC");
         address treasury = vm.envAddress("ACP_TREASURY");
@@ -86,6 +92,12 @@ contract DeployUnderwritingSharedEnv is Script {
 
         // 7. Wire hook to evaluator + coordinator (one-shot)
         hook.setWiring(address(evaluator), address(coordinator));
+
+        deployedAcp = address(acp);
+        deployedCollateralManager = address(manager);
+        deployedHook = address(hook);
+        deployedCoordinator = address(coordinator);
+        deployedEvaluator = address(evaluator);
 
         vm.stopBroadcast();
 
