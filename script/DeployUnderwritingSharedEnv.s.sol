@@ -43,6 +43,7 @@ contract DeployUnderwritingSharedEnv is Script {
         uint64 clientConfirmationWindow = uint64(vm.envUint("CLIENT_CONFIRMATION_WINDOW"));
 
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerKey);
 
         vm.startBroadcast(deployerKey);
 
@@ -55,10 +56,10 @@ contract DeployUnderwritingSharedEnv is Script {
         // 2. Collateral manager
         UnderwritingCollateralManager manager = new UnderwritingCollateralManager(IERC20(usdc));
 
-        // 3. Underwriting hook implementation + proxy (admin = deployer = msg.sender)
+        // 3. Underwriting hook implementation + proxy (admin = deployer derived from PRIVATE_KEY)
         UnderwritingHook hookImplementation = new UnderwritingHook();
         ERC1967Proxy hookProxy =
-            new ERC1967Proxy(address(hookImplementation), abi.encodeCall(UnderwritingHook.initialize, (address(acp), msg.sender)));
+            new ERC1967Proxy(address(hookImplementation), abi.encodeCall(UnderwritingHook.initialize, (address(acp), deployer)));
         UnderwritingHook hook = UnderwritingHook(address(hookProxy));
 
         // 4. Whitelist hook + pin the settlement token before any protected jobs are created
@@ -78,7 +79,7 @@ contract DeployUnderwritingSharedEnv is Script {
             address(evaluatorImplementation),
             abi.encodeCall(
                 UnderwritingEvaluator.initialize,
-                (address(acp), address(hook), clientConfirmationWindow, msg.sender)
+                (address(acp), address(hook), clientConfirmationWindow, deployer)
             )
         );
         UnderwritingEvaluator evaluator = UnderwritingEvaluator(address(evaluatorProxy));

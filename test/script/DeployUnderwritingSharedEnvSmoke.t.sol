@@ -9,6 +9,7 @@ import "../../contracts/settlement/UnderwritingSettlementCoordinator.sol";
 import "../../contracts/settlement/UnderwritingEvaluator.sol";
 import "../../contracts/settlement/UnderwritingCollateralManager.sol";
 import "../../contracts/interfaces/IAgenticCommerceKernel.sol";
+import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
 import "../../contracts/hooks/underwriting/IUnderwritingHookView.sol";
 import "../mocks/MockERC20.sol";
 
@@ -17,7 +18,11 @@ import "../mocks/MockERC20.sol";
 contract DeployUnderwritingSharedEnvSmokeTest is Test {
     address internal deployer = makeAddr("deployer");
     address internal treasury = makeAddr("treasury");
+    address internal client = makeAddr("client");
+    address internal provider = makeAddr("provider");
+    address internal underwriter = makeAddr("underwriter");
     uint64 internal constant CLIENT_CONFIRMATION_WINDOW = 1 hours;
+    uint256 internal constant JOB_BUDGET = 100e18;
 
     function testDeployAndWireProducesValidStack() public {
         MockERC20 usdc = new MockERC20("Mock USDC", "mUSDC");
@@ -57,7 +62,6 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
 
     function testRegisterUnderwriterAndConfigureRecipients() public {
         MockERC20 usdc = new MockERC20("Mock USDC", "mUSDC");
-        address underwriter = makeAddr("underwriter");
         address premiumRecipient = makeAddr("premiumRecipient");
         address recoveryRecipient = makeAddr("recoveryRecipient");
 
@@ -90,6 +94,47 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
         assertEq(storedRecovery, recoveryRecipient);
     }
 
+    function testFreshDeploymentSupportsImmediateHookedJobCreationAndBudgeting() public {
+        MockERC20 usdc = new MockERC20("Mock USDC", "mUSDC");
+
+        vm.startPrank(deployer);
+
+        AgenticCommerce acp = _deployAcp(treasury);
+        UnderwritingCollateralManager manager = new UnderwritingCollateralManager(IERC20(address(usdc)));
+        UnderwritingHook hook = _deployHook(address(acp), deployer);
+        acp.setHookWhitelist(address(hook), true);
+        hook.setAllowedSettlementToken(address(usdc));
+
+        UnderwritingSettlementCoordinator coordinator = new UnderwritingSettlementCoordinator(
+            IAgenticCommerceKernel(address(acp)), hook, manager
+        );
+        UnderwritingEvaluator evaluator =
+            _deployEvaluator(address(acp), address(hook), CLIENT_CONFIRMATION_WINDOW, deployer);
+
+        hook.setWiring(address(evaluator), address(coordinator));
+        hook.registerUnderwriter(underwriter);
+
+        vm.stopPrank();
+
+        vm.prank(client);
+        uint256 jobId =
+            acp.createJob(provider, address(evaluator), block.timestamp + 1 days, "shared env smoke job", address(hook), 0);
+
+        vm.prank(client);
+        acp.setBudget(jobId, address(usdc), JOB_BUDGET, abi.encode(_commit()));
+
+        AgenticCommerce.Job memory job = acp.getJob(jobId);
+        UnderwritingTypes.UnderwriteCommit memory commit = hook.getCommit(jobId);
+
+        assertEq(job.hook, address(hook));
+        assertEq(job.evaluator, address(evaluator));
+        assertEq(job.paymentToken, address(usdc));
+        assertEq(job.budget, JOB_BUDGET);
+        assertEq(commit.underwriter, underwriter);
+        assertEq(hook.jobUnderwriter(jobId), underwriter);
+        assertEq(uint256(hook.jobSidecarState(jobId)), uint256(UnderwritingTypes.SidecarState.Committed));
+    }
+
     function _deployAcp(address treasury_) internal returns (AgenticCommerce) {
         AgenticCommerce implementation = new AgenticCommerce();
         ERC1967Proxy proxy = new ERC1967Proxy(address(implementation), abi.encodeCall(AgenticCommerce.initialize, (treasury_)));
@@ -113,5 +158,17 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
             abi.encodeCall(UnderwritingEvaluator.initialize, (acp_, hook_, clientConfirmationWindowSeconds_, admin_))
         );
         return UnderwritingEvaluator(address(proxy));
+    }
+
+    function _commit() internal view returns (UnderwritingTypes.UnderwriteCommit memory) {
+        return UnderwritingTypes.UnderwriteCommit({
+            parentJobId: 0,
+            underwriter: underwriter,
+            validUntil: uint64(block.timestamp + 1 days),
+            policyHash: keccak256("policy"),
+            quoteIdHash: keccak256("quote"),
+            termsHash: keccak256("terms"),
+            allowCloseJob: false
+        });
     }
 }
