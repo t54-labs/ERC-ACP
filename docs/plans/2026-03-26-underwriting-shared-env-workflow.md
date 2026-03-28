@@ -321,73 +321,100 @@ Expected: PASS after tests are updated to choose either `confirmByClient(...)` o
 ### Task 4: Make `expiredAt` A Provider Submission Deadline For Hooked Underwriting Jobs
 
 **Files:**
-- Modify: `contracts/AgenticCommerceHooked.sol`
-- Create: `test/AgenticCommerceHookedUnderwritingExpiry.t.sol`
-- Modify: `test/examples/UnderwritingHookSystemExample.t.sol`
+- Modify: `contracts/acp/contracts/AgenticCommerce.sol` (canonical ACP runtime imported as `@acp/AgenticCommerce.sol`)
+- Modify: `test/hooks/underwriting/UnderwritingHookUpgradeable.t.sol`
+- Modify: `test/integration/UnderwritingSharedEnvFlow.t.sol`
 
 **Step 1: Write the failing tests**
 
 ```solidity
-function testUnsubmittedHookedJobCanClaimRefundAfterExpiredAt() public {
+function testPreSubmitTimeoutRefundsBudgetAndRoutesCollateralToRecovery() public {
+    _fundAndOrchestrateJob(jobId, commit, permit, permitSig);
     vm.warp(job.expiredAt + 1);
-    acp.claimRefund(jobId);
 
-    assertEq(uint256(acp.getJob(jobId).status), uint256(IAgenticCommerceKernel.JobStatus.Expired));
+    vm.prank(client);
+    acp.claimRefund(jobId);
+    coordinator.settleExpiry(jobId);
+
+    assertEq(uint256(acp.getJob(jobId).status), uint256(AgenticCommerce.JobStatus.Expired));
+    assertEq(usdc.balanceOf(recoveryRecipient), requiredCollateralUsdc);
 }
 
-function testTimelySubmittedHookedJobCannotClaimRefundAfterExpiredAt() public {
-    _submitEvidenceOnTime(jobId);
-    vm.warp(job.expiredAt + 1);
+function testPlainSubmittedJobClaimRefundRevertsDuringGracePeriod() public {
+    uint256 submittedJobId = _createPlainSubmittedJob(block.timestamp + 6 minutes);
+    vm.warp(acp.getJob(submittedJobId).expiredAt + 1);
 
-    vm.expectRevert(AgenticCommerceHooked.WrongStatus.selector);
-    acp.claimRefund(jobId);
+    vm.prank(client);
+    vm.expectRevert(AgenticCommerce.GracePeriodActive.selector);
+    acp.claimRefund(submittedJobId);
+}
+
+function testPlainSubmittedJobClaimRefundSucceedsAfterGracePeriod() public {
+    uint256 submittedJobId = _createPlainSubmittedJob(block.timestamp + 6 minutes);
+    AgenticCommerce.Job memory submittedJob = acp.getJob(submittedJobId);
+
+    vm.warp(submittedJob.submittedAt + acp.EVALUATION_GRACE_PERIOD() + 1);
+    vm.prank(client);
+    acp.claimRefund(submittedJobId);
+
+    assertEq(uint256(acp.getJob(submittedJobId).status), uint256(AgenticCommerce.JobStatus.Expired));
 }
 ```
 
 **Step 2: Run test to verify it fails**
 
-Run: `forge test --match-contract AgenticCommerceHookedUnderwritingExpiryTest -vv`
+Run:
+- `forge test --match-test testPreSubmitTimeoutRefundsBudgetAndRoutesCollateralToRecovery -vv`
+- `forge test --match-test testPlainSubmittedJobClaimRefundRevertsDuringGracePeriod -vv`
+- `forge test --match-test testPlainSubmittedJobClaimRefundSucceedsAfterGracePeriod -vv`
 
-Expected: FAIL because the current core allows `claimRefund()` from `Submitted` after `expiredAt`.
+Expected: FAIL until the canonical ACP core records `submittedAt` on submit and keeps submitted jobs inside the evaluator grace period before refunds open.
 
 **Step 3: Implement the minimal core change**
 
 ```solidity
-mapping(uint256 jobId => uint64 submittedAt) internal submittedAtByJobId;
+struct Job {
+    // ... existing fields ...
+    uint256 submittedAt;
+}
 
 function submit(uint256 jobId, bytes32 deliverable, bytes calldata optParams) external nonReentrant {
     // existing validation...
     job.status = JobStatus.Submitted;
-    submittedAtByJobId[jobId] = uint64(block.timestamp);
+    job.submittedAt = block.timestamp;
     emit JobSubmitted(jobId, msg.sender, deliverable);
     _afterHook(job.hook, jobId, msg.sig, data);
 }
 
 function claimRefund(uint256 jobId) external nonReentrant {
     Job storage job = jobs[jobId];
-    if (job.status == JobStatus.Submitted && job.hook != address(0)) {
-        uint64 submittedAt = submittedAtByJobId[jobId];
-        if (submittedAt != 0 && submittedAt <= job.expiredAt) revert WrongStatus();
-    }
+    if (job.status == JobStatus.Submitted &&
+        block.timestamp < job.submittedAt + EVALUATION_GRACE_PERIOD)
+        revert GracePeriodActive();
     // existing refund path...
 }
 ```
 
 Implementation note:
-- Scope the refund freeze to hooked jobs in v1 so non-hooked ACP behavior stays unchanged.
-- The underwriting flow can then treat `expiredAt` as the provider submission deadline without letting a timely submission be refunded out from under the post-submit confirmation/adjudication flow.
+- In the canonical ACP runtime this is no longer a hooked-only guard. Submitted jobs retain a short evaluator grace period, while underwriting-specific timeout handling still lives in the hook/coordinator flow.
+- The underwriting flow can therefore treat `expiredAt` as the provider submission deadline without letting a timely submission be refunded out from under the post-submit confirmation/adjudication flow.
 
 **Step 4: Run focused tests**
 
-Run: `forge test --match-contract AgenticCommerceHookedUnderwritingExpiryTest -vv`
+Run:
+- `forge test --match-test testPreSubmitTimeoutRefundsBudgetAndRoutesCollateralToRecovery -vv`
+- `forge test --match-test testPlainSubmittedJobClaimRefundRevertsDuringGracePeriod -vv`
+- `forge test --match-test testPlainSubmittedJobClaimRefundSucceedsAfterGracePeriod -vv`
 
 Expected: PASS
 
 **Step 5: Run regression coverage**
 
-Run: `forge test --match-contract UnderwritingHookSystemExampleTest -vv`
+Run:
+- `forge test --match-path test/hooks/underwriting/UnderwritingHookUpgradeable.t.sol -vv`
+- `forge test --match-path test/integration/UnderwritingSharedEnvFlow.t.sol -vv`
 
-Expected: PASS with the new expiry behavior enforced.
+Expected: PASS with pre-submit timeout refunds still working for hooked underwriting jobs and timely submitted jobs staying frozen until the evaluator grace period elapses.
 
 ---
 
