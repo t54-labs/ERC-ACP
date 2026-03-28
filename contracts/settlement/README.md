@@ -17,7 +17,7 @@ The canonical runtime for the migration is:
 5. `settlement/UnderwritingCollateralManager.sol`
 6. `settlement/UnderwritingSettlementEscrow.sol`
 
-The lightweight `hooks/underwriting/UnderwritingCoordinator.sol`, `hooks/underwriting/UnderwritingEvaluator.sol`, and `examples/UnderwritingHookSystemExample.sol` paths are legacy migration helpers only and are not part of the canonical shared-environment deployment.
+`examples/UnderwritingHookSystemExample.sol` remains a legacy migration helper for tests and local integrations only; it is not part of the canonical shared-environment deployment.
 
 ## Target Canonical Flow
 

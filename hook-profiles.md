@@ -6,7 +6,7 @@ This document describes **recommended profiles** for using hooks with the Agenti
 - **Profile B — Advanced Escrow / Settlement Hooks**: hooks that custody tokens and orchestrate multi‑phase flows (e.g. two‑phase escrow, atomic side‑transfers), accepting higher complexity and liveness risk.
 - **Profile C — Experimental / Custom Hooks**: hooks that fall outside A and B; should be treated as high‑risk or non‑production until well‑understood and audited.
 
-The profiles assume a core compatible with the hookable Agentic Commerce variant (e.g. `AgenticCommerceHooked` in the reference implementations), where:
+The profiles assume a hook-capable ACP core (for this repo, the canonical `@acp/AgenticCommerce.sol` runtime), where:
 
 - Each job MAY store a per‑job `hook` address set at `createJob`.
 - Hookable functions call:

@@ -85,7 +85,7 @@ contract FundTransferHook is BaseACPHook {
     }
 
     // -------------------------------------------------------------------------
-    // Hook callbacks (called by AgenticCommerceHooked via beforeAction/afterAction)
+    // Hook callbacks (called by the ACP kernel via beforeAction/afterAction)
     // -------------------------------------------------------------------------
 
     /// @dev Store transfer commitment from setBudget optParams.

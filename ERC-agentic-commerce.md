@@ -141,7 +141,7 @@ Implementations MAY charge a **platform fee** (basis points) on Completed, paid 
 
 ### Hooks (OPTIONAL)
 
-Implementations MAY support an optional **hook contract** per job to extend the core protocol without modifying it. The hook address is set at job creation (or `address(0)` for no hook) and stored on the job. A **non‑hooked kernel** that ignores the `hook` field (or always sets it to `address(0)`) is fully compliant with this specification. In this repo, the local `contracts/AgenticCommerce.sol` file demonstrates that minimal pattern and the local `contracts/AgenticCommerceHooked.sol` file demonstrates a legacy hookable extension. For ongoing ACP migration work in this repo, the canonical runtime now comes from `contracts/acp` via `@acp/...` imports rather than those local copies.
+Implementations MAY support an optional **hook contract** per job to extend the core protocol without modifying it. The hook address is set at job creation (or `address(0)` for no hook) and stored on the job. A **non‑hooked kernel** that ignores the `hook` field (or always sets it to `address(0)`) is fully compliant with this specification. In this repo, ongoing ACP work consumes the canonical runtime from `contracts/acp` via `@acp/...` imports rather than any local ACP copies.
 
 A hook contract SHALL implement the `IACPHook` interface — just two functions:
 
@@ -311,7 +311,7 @@ Step 5 — job continues normally
 
 **Problem:** Some ACP extensions do not fit a single `BaseACPHook` contract. Hook-driven underwriting needs a policy hook, an evaluator for underwriter signatures, a settlement coordinator for explicit economic actions, on-demand escrow adapters, and a collateral manager integration.
 
-**Solution:** Use `script/DeployUnderwritingSharedEnv.s.sol` for the canonical deployment path once phase 8 rewrites it to the `@acp` runtime. Until then, `contracts/examples/UnderwritingHookSystemExample.sol` remains a legacy migration helper for tests and local integrations, while the target production runtime uses `UnderwritingHook`, `UnderwritingSettlementCoordinator`, and the settlement-side `contracts/settlement/UnderwritingEvaluator.sol` directly. Then use `setBudget(..., abi.encode(UnderwriteCommit))` plus a matching `UnderwritePermit` for the protected funding flow.
+**Solution:** Use `script/DeployUnderwritingSharedEnv.s.sol` for the canonical deployment path on the `@acp` runtime. `contracts/examples/UnderwritingHookSystemExample.sol` remains a legacy helper for tests and local integrations, while the production runtime uses `UnderwritingHook`, `UnderwritingSettlementCoordinator`, and the settlement-side `contracts/settlement/UnderwritingEvaluator.sol` directly. Then use `setBudget(..., abi.encode(UnderwriteCommit))` plus a matching `UnderwritePermit` for the protected funding flow.
 
 See also: `contracts/settlement/README.md` for the hook-versus-settlement boundary and the concrete funding/finalization flow.
 

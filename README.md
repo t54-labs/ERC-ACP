@@ -12,8 +12,8 @@
 1. Read the spec: [ERC-agentic-commerce.md](./ERC-agentic-commerce.md).
 2. Bootstrap dependencies from a fresh checkout: `./script/bootstrap-foundry-deps.sh`.
 3. For new ACP core work, use the canonical submodule-backed source in `contracts/acp/contracts/` via `@acp/...` imports.
-4. Treat `contracts/AgenticCommerce.sol` and `contracts/AgenticCommerceHooked.sol` as temporary migration-era copies, not the source of truth for new ACP changes.
-5. For underwriting workflows, treat `contracts/hooks/underwriting/` as the workflow authority and `contracts/settlement/` as the premium/collateral/principal/dispute layer.
+4. For underwriting workflows, treat `contracts/hooks/underwriting/` as the workflow authority and `contracts/settlement/` as the premium/collateral/principal/dispute layer.
+5. Protected underwriting in the canonical shared-environment path is currently USDC-only via `UnderwritingHook.setAllowedSettlementToken(...)`.
 
 ## Shared-Environment Deployment
 
