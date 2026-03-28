@@ -92,7 +92,15 @@ contract UnderwritingHookSystemExample {
         coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp_)), hook, collateralManager_
         );
-        evaluator = new UnderwritingEvaluator(IAgenticCommerceKernel(address(acp_)), hook, clientConfirmationWindowSeconds_);
+        UnderwritingEvaluator evaluatorImplementation = new UnderwritingEvaluator();
+        ERC1967Proxy evaluatorProxy = new ERC1967Proxy(
+            address(evaluatorImplementation),
+            abi.encodeCall(
+                UnderwritingEvaluator.initialize,
+                (address(acp_), address(hook), clientConfirmationWindowSeconds_, address(this))
+            )
+        );
+        evaluator = UnderwritingEvaluator(address(evaluatorProxy));
 
         hook.setWiring(address(evaluator), address(coordinator));
 

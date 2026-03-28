@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
+import "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
 import "../interfaces/IAgenticCommerceKernel.sol";
 import "../hooks/underwriting/IUnderwritingHookView.sol";
 import "../hooks/underwriting/UnderwritingTypes.sol";
@@ -14,7 +17,8 @@ import "../hooks/underwriting/UnderwritingTypes.sol";
  *      the ACP job lifecycle, underwriting sidecar state, and EIP-712 signatures
  *      before calling back into ACP.
  */
-contract UnderwritingEvaluator is EIP712 {
+contract UnderwritingEvaluator is Initializable, AccessControlUpgradeable, UUPSUpgradeable, EIP712Upgradeable {
+    error ZeroAddress();
     error DecisionExpired(uint64 deadline, uint64 currentTimestamp);
     error NonceUsed(address underwriter, uint256 nonce);
     error InvalidSigner(address expected, address actual);
@@ -29,24 +33,45 @@ contract UnderwritingEvaluator is EIP712 {
     bytes32 private constant REJECT_TYPEHASH =
         keccak256("RejectDecision(uint256 jobId,bytes32 reason,uint64 deadline,uint256 nonce)");
 
-    IAgenticCommerceKernel public immutable acp;
-    IUnderwritingHookView public immutable hook;
-    uint64 public immutable clientConfirmationWindowSeconds;
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
+    bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");
+
+    IAgenticCommerceKernel public acp;
+    IUnderwritingHookView public hook;
+    uint64 public clientConfirmationWindowSeconds;
+    address public admin;
 
     mapping(address underwriter => mapping(uint256 nonce => bool used)) public usedNonces;
+
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
 
     /// @notice Deploys the evaluator for a specific ACP kernel and hook.
     /// @param acp_ The ACP kernel used for job state reads and decisions.
     /// @param hook_ The underwriting hook view used for sidecar state reads.
     /// @param clientConfirmationWindowSeconds_ The duration after submission during which only the client may confirm.
-    constructor(
-        IAgenticCommerceKernel acp_,
-        IUnderwritingHookView hook_,
-        uint64 clientConfirmationWindowSeconds_
-    ) EIP712("Underwriting Settlement Evaluator", "1") {
-        acp = acp_;
-        hook = hook_;
+    /// @param admin_ The address granted admin and upgrader roles.
+    function initialize(
+        address acp_,
+        address hook_,
+        uint64 clientConfirmationWindowSeconds_,
+        address admin_
+    ) external initializer {
+        if (acp_ == address(0) || hook_ == address(0) || admin_ == address(0)) revert ZeroAddress();
+
+        __AccessControl_init();
+        __EIP712_init("Underwriting Settlement Evaluator", "1");
+
+        acp = IAgenticCommerceKernel(acp_);
+        hook = IUnderwritingHookView(hook_);
         clientConfirmationWindowSeconds = clientConfirmationWindowSeconds_;
+        admin = admin_;
+
+        _grantRole(DEFAULT_ADMIN_ROLE, admin_);
+        _grantRole(ADMIN_ROLE, admin_);
+        _grantRole(UPGRADER_ROLE, admin_);
     }
 
     /// @notice Completes a submitted job using an underwriter-signed decision.
@@ -149,4 +174,8 @@ contract UnderwritingEvaluator is EIP712 {
 
         usedNonces[expectedUnderwriter][nonce] = true;
     }
+
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}
+
+    uint256[44] private __gap;
 }

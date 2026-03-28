@@ -92,11 +92,7 @@ contract UnderwritingSharedEnvFlowTest is Test {
             hook,
             collateralManager
         );
-        evaluator = new UnderwritingEvaluator(
-            IAgenticCommerceKernel(address(acp)),
-            hook,
-            CLIENT_CONFIRM_WINDOW
-        );
+        evaluator = _deployEvaluator(address(acp), address(hook), CLIENT_CONFIRM_WINDOW, address(this));
         hook.setWiring(address(evaluator), address(coordinator));
 
         // Register the underwriter
@@ -786,5 +782,17 @@ contract UnderwritingSharedEnvFlowTest is Test {
         ERC1967Proxy proxy =
             new ERC1967Proxy(address(implementation), abi.encodeCall(UnderwritingHook.initialize, (acp_, admin_)));
         return UnderwritingHook(address(proxy));
+    }
+
+    function _deployEvaluator(address acp_, address hook_, uint64 clientConfirmationWindowSeconds_, address admin_)
+        internal
+        returns (UnderwritingEvaluator)
+    {
+        UnderwritingEvaluator implementation = new UnderwritingEvaluator();
+        ERC1967Proxy proxy = new ERC1967Proxy(
+            address(implementation),
+            abi.encodeCall(UnderwritingEvaluator.initialize, (acp_, hook_, clientConfirmationWindowSeconds_, admin_))
+        );
+        return UnderwritingEvaluator(address(proxy));
     }
 }

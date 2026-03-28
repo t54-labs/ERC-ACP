@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "../../contracts/interfaces/IAgenticCommerceKernel.sol";
 import "../../contracts/hooks/underwriting/IUnderwritingHookView.sol";
 import "../../contracts/hooks/underwriting/UnderwritingTypes.sol";
@@ -136,6 +137,7 @@ contract UnderwritingEvaluatorTest is Test {
     MockSettlementEvaluatorACP internal acp;
     MockSettlementEvaluatorHook internal hook;
     UnderwritingEvaluator internal evaluator;
+    address internal admin = makeAddr("admin");
 
     function setUp() public {
         (rootUnderwriter, rootUnderwriterPk) = makeAddrAndKey("root-underwriter");
@@ -144,7 +146,7 @@ contract UnderwritingEvaluatorTest is Test {
 
         acp = new MockSettlementEvaluatorACP(address(0xBEEF));
         hook = new MockSettlementEvaluatorHook();
-        evaluator = new UnderwritingEvaluator(acp, hook, 1 hours);
+        evaluator = _deployEvaluator(address(acp), address(hook), 1 hours, admin);
     }
 
     function testCompleteBySigRejectsRootOpenAndCloseBeforeSubmit() public {
@@ -348,5 +350,17 @@ contract UnderwritingEvaluatorTest is Test {
                 address(evaluator)
             )
         );
+    }
+
+    function _deployEvaluator(address acp_, address hook_, uint64 clientConfirmationWindowSeconds_, address admin_)
+        internal
+        returns (UnderwritingEvaluator)
+    {
+        UnderwritingEvaluator implementation = new UnderwritingEvaluator();
+        ERC1967Proxy proxy = new ERC1967Proxy(
+            address(implementation),
+            abi.encodeCall(UnderwritingEvaluator.initialize, (acp_, hook_, clientConfirmationWindowSeconds_, admin_))
+        );
+        return UnderwritingEvaluator(address(proxy));
     }
 }

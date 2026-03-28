@@ -34,11 +34,8 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
             IAgenticCommerceKernel(address(acp)), hook, manager
         );
 
-        UnderwritingEvaluator evaluator = new UnderwritingEvaluator(
-            IAgenticCommerceKernel(address(acp)),
-            IUnderwritingHookView(address(hook)),
-            CLIENT_CONFIRMATION_WINDOW
-        );
+        UnderwritingEvaluator evaluator =
+            _deployEvaluator(address(acp), address(hook), CLIENT_CONFIRMATION_WINDOW, deployer);
 
         hook.setWiring(address(evaluator), address(coordinator));
 
@@ -75,11 +72,8 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
         UnderwritingSettlementCoordinator coordinator = new UnderwritingSettlementCoordinator(
             IAgenticCommerceKernel(address(acp)), hook, manager
         );
-        UnderwritingEvaluator evaluator = new UnderwritingEvaluator(
-            IAgenticCommerceKernel(address(acp)),
-            IUnderwritingHookView(address(hook)),
-            CLIENT_CONFIRMATION_WINDOW
-        );
+        UnderwritingEvaluator evaluator =
+            _deployEvaluator(address(acp), address(hook), CLIENT_CONFIRMATION_WINDOW, deployer);
 
         hook.setWiring(address(evaluator), address(coordinator));
         hook.registerUnderwriter(underwriter);
@@ -107,5 +101,17 @@ contract DeployUnderwritingSharedEnvSmokeTest is Test {
         ERC1967Proxy proxy =
             new ERC1967Proxy(address(implementation), abi.encodeCall(UnderwritingHook.initialize, (acp_, admin_)));
         return UnderwritingHook(address(proxy));
+    }
+
+    function _deployEvaluator(address acp_, address hook_, uint64 clientConfirmationWindowSeconds_, address admin_)
+        internal
+        returns (UnderwritingEvaluator)
+    {
+        UnderwritingEvaluator implementation = new UnderwritingEvaluator();
+        ERC1967Proxy proxy = new ERC1967Proxy(
+            address(implementation),
+            abi.encodeCall(UnderwritingEvaluator.initialize, (acp_, hook_, clientConfirmationWindowSeconds_, admin_))
+        );
+        return UnderwritingEvaluator(address(proxy));
     }
 }

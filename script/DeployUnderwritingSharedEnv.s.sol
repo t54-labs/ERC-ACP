@@ -29,7 +29,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  *   3. UnderwritingHook implementation + proxy
  *   4. Whitelist hook + pin settlement token
  *   5. UnderwritingSettlementCoordinator
- *   6. UnderwritingEvaluator
+ *   6. UnderwritingEvaluator implementation + proxy
  *   7. Wire hook -> (evaluator, coordinator)
  *
  * Usage:
@@ -72,12 +72,16 @@ contract DeployUnderwritingSharedEnv is Script {
             manager
         );
 
-        // 6. Evaluator
-        UnderwritingEvaluator evaluator = new UnderwritingEvaluator(
-            IAgenticCommerceKernel(address(acp)),
-            IUnderwritingHookView(address(hook)),
-            clientConfirmationWindow
+        // 6. Evaluator implementation + proxy
+        UnderwritingEvaluator evaluatorImplementation = new UnderwritingEvaluator();
+        ERC1967Proxy evaluatorProxy = new ERC1967Proxy(
+            address(evaluatorImplementation),
+            abi.encodeCall(
+                UnderwritingEvaluator.initialize,
+                (address(acp), address(hook), clientConfirmationWindow, msg.sender)
+            )
         );
+        UnderwritingEvaluator evaluator = UnderwritingEvaluator(address(evaluatorProxy));
 
         // 7. Wire hook to evaluator + coordinator (one-shot)
         hook.setWiring(address(evaluator), address(coordinator));
@@ -88,6 +92,7 @@ contract DeployUnderwritingSharedEnv is Script {
         console.log("ACP implementation: ", address(acpImplementation));
         console.log("ACP proxy:          ", address(acp));
         console.log("Hook implementation:", address(hookImplementation));
+        console.log("Evaluator impl:     ", address(evaluatorImplementation));
         console.log("CollateralManager:  ", address(manager));
         console.log("UnderwritingHook:   ", address(hook));
         console.log("Coordinator:        ", address(coordinator));
