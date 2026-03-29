@@ -3,10 +3,13 @@
 This record captures Task 3 from
 `docs/plans/2026-03-28-tenderly-shared-env-deployment-test-plan.md`.
 
+This version supersedes the earlier Task 3 run against the previous Tenderly
+VNet. The current source of truth is the fresh VNet below.
+
 ## Loaded Inputs
 
-- Tenderly admin RPC: `https://virtual.base.eu.rpc.tenderly.co/d6ac0a5d-d160-4385-91bf-a0d56e80daf5`
-- Tenderly admin WSS: `wss://virtual.base.eu.rpc.tenderly.co/bd7ddccd-9725-4362-891b-c17de416fae3`
+- Tenderly admin RPC: `https://virtual.base.eu.rpc.tenderly.co/538b9b2f-dc98-4d74-b7ce-30a7fe843951`
+- Tenderly admin WSS: `wss://virtual.base.eu.rpc.tenderly.co/cd9d703f-6140-4bde-a0e9-76badfa9acee`
 - Base USDC: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
 - Client confirmation window: `3600`
 
