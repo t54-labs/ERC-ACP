@@ -3,12 +3,15 @@
 This record captures Task 5 from
 `docs/plans/2026-03-28-tenderly-shared-env-deployment-test-plan.md`.
 
+This version supersedes the earlier Task 5 run against the previous Tenderly
+VNet. The current source of truth is the fresh VNet deployment below.
+
 ## Deployment Under Test
 
-- ACP proxy: `0xc435cC0619df16189502c389Ec8BEFEA21CF621c`
-- Hook proxy: `0x4122A868aB76AFc1BE672D64EB504a2470844d39`
-- Evaluator proxy: `0x7bd3d28371b0b12034D4eCc896E51128575115B9`
-- Coordinator: `0x32904fCCf8f8A8FC81670eDf649aDA4d6495F798`
+- ACP proxy: `0x995E21FB605A2714760318d35c058f3968446682`
+- Hook proxy: `0x95B66dF83C29175A78E56ce8ECbdc3690b64E8a7`
+- Evaluator proxy: `0x703f8EE31bd89C169b2BcbCb33E6697C0C6d3cd3`
+- Coordinator: `0xa2a3A13c8cEe2eD43b44822Fe98a1c2CCA1b085e`
 - Expected deployer/admin: `0xFb471f732f12584C4c6e77F648B1545B117DA408`
 - Expected settlement token: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
 
@@ -40,8 +43,8 @@ cast call "$HOOK_PROXY" "coordinator()(address)" \
 - Hook allowed settlement token: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
 - Hook admin: `0xFb471f732f12584C4c6e77F648B1545B117DA408`
 - Evaluator admin: `0xFb471f732f12584C4c6e77F648B1545B117DA408`
-- Hook evaluator wiring: `0x7bd3d28371b0b12034D4eCc896E51128575115B9`
-- Hook coordinator wiring: `0x32904fCCf8f8A8FC81670eDf649aDA4d6495F798`
+- Hook evaluator wiring: `0x703f8EE31bd89C169b2BcbCb33E6697C0C6d3cd3`
+- Hook coordinator wiring: `0xa2a3A13c8cEe2eD43b44822Fe98a1c2CCA1b085e`
 
 ## Outcome
 
