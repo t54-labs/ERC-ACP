@@ -19,26 +19,49 @@
 
 Foundry scripts in `script/` deploy and operate the underwriting stack on a shared Tenderly Base virtual testnet.
 
+### Prepare a Tenderly operator shell
+
+Export the required secrets and operator inputs, then source the setup helper:
+
+```bash
+export TENDERLY_ACCESS_KEY=<tenderly-access-key>
+export DEPLOYER_PRIVATE_KEY=<deployer-private-key>
+export UNDERWRITER_PRIVATE_KEY=<underwriter-private-key>
+export CLIENT_PRIVATE_KEY=<client-private-key>
+export PROVIDER_PRIVATE_KEY=<provider-private-key>
+export BASE_USDC=<usdc-address>
+export ACP_TREASURY=<treasury-address>
+export PREMIUM_RECIPIENT=<premium-recipient-address>
+export RECOVERY_RECIPIENT=<recovery-recipient-address>
+export MERCHANT_EXECUTION_WALLET=<merchant-execution-wallet>
+
+source script/tenderly_shared_env_setup.sh
+```
+
+The helper:
+
+- defaults the Tenderly RPC, WSS, verifier URL, and `CLIENT_CONFIRMATION_WINDOW`
+- derives and exports `DEPLOYER_ADDRESS`, `UNDERWRITER_ADDRESS`, `CLIENT_ADDRESS`, and `PROVIDER_ADDRESS`
+- prints the deployment success criteria before you broadcast anything
+- provides `tenderly_use_actor_key <deployer|underwriter|client|provider>` so the script-facing `PRIVATE_KEY` is always switched explicitly before each `forge script` invocation
+
 ### Deploy the full stack
 
 ```bash
-export PRIVATE_KEY=<deployer-pk>
-export BASE_USDC=<usdc-address>
-export ACP_TREASURY=<treasury-address>
-export CLIENT_CONFIRMATION_WINDOW=3600  # seconds
+tenderly_use_actor_key deployer
 
 forge script script/DeployUnderwritingSharedEnv.s.sol:DeployUnderwritingSharedEnv \
-  --rpc-url $RPC_URL --broadcast
+  --rpc-url $TENDERLY_VIRTUAL_TESTNET_RPC --broadcast
 ```
 
 ### Register an underwriter
 
 ```bash
 export UNDERWRITING_HOOK=<hook-address>
-export UNDERWRITER_ADDRESS=<underwriter-eoa>
+tenderly_use_actor_key deployer
 
 forge script script/RegisterUnderwriter.s.sol:RegisterUnderwriter \
-  --rpc-url $RPC_URL --broadcast
+  --rpc-url $TENDERLY_VIRTUAL_TESTNET_RPC --broadcast
 ```
 
 ### Configure underwriter recipients
@@ -47,11 +70,10 @@ Called by the underwriter themselves to set premium and recovery addresses:
 
 ```bash
 export COLLATERAL_MANAGER=<manager-address>
-export PREMIUM_RECIPIENT=<premium-recipient>
-export RECOVERY_RECIPIENT=<recovery-recipient>
+tenderly_use_actor_key underwriter
 
 forge script script/ConfigureUnderwriterRecipients.s.sol:ConfigureUnderwriterRecipients \
-  --rpc-url $RPC_URL --broadcast
+  --rpc-url $TENDERLY_VIRTUAL_TESTNET_RPC --broadcast
 ```
 
 ### Redeploying safely
