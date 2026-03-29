@@ -1,52 +1,13 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
-
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  echo "source this file instead of executing it:"
-  echo "  source script/load-tenderly-shared-env.sh [env-file]"
-  exit 1
-fi
-
-env_file="${1:-.env.tenderly.shared}"
-
-if [[ ! -f "${env_file}" ]]; then
-  echo "missing env file: ${env_file}" >&2
-  return 1
-fi
-
-# shellcheck disable=SC1090
-source "${env_file}"
-
-required_vars=(
-  TENDERLY_ACCESS_KEY
-  TENDERLY_VIRTUAL_TESTNET_RPC
-  TENDERLY_VIRTUAL_TESTNET_WSS
-  DEPLOYER_PRIVATE_KEY
-  UNDERWRITER_PRIVATE_KEY
-  CLIENT_PRIVATE_KEY
-  PROVIDER_PRIVATE_KEY
-  BASE_USDC
-  ACP_TREASURY
-  CLIENT_CONFIRMATION_WINDOW
-  PREMIUM_RECIPIENT
-  RECOVERY_RECIPIENT
-  MERCHANT_EXECUTION_WALLET
-)
-
-for var_name in "${required_vars[@]}"; do
-  if [[ -z "${!var_name:-}" ]]; then
-    echo "missing required env var: ${var_name}" >&2
-    return 1
+is_tenderly_shared_env_sourced() {
+  if [[ -n "${ZSH_EVAL_CONTEXT:-}" ]]; then
+    [[ "${ZSH_EVAL_CONTEXT}" == *:file ]]
+    return
   fi
-done
 
-export TENDERLY_VERIFIER_URL="${TENDERLY_VIRTUAL_TESTNET_RPC}/verify/etherscan"
-
-export DEPLOYER_ADDRESS="$(cast wallet address --private-key "${DEPLOYER_PRIVATE_KEY}")"
-export UNDERWRITER_ADDRESS="$(cast wallet address --private-key "${UNDERWRITER_PRIVATE_KEY}")"
-export CLIENT_ADDRESS="$(cast wallet address --private-key "${CLIENT_PRIVATE_KEY}")"
-export PROVIDER_ADDRESS="$(cast wallet address --private-key "${PROVIDER_PRIVATE_KEY}")"
+  [[ -n "${BASH_SOURCE:-}" && "${BASH_SOURCE[0]}" != "$0" ]]
+}
 
 use_actor_key() {
   local actor="${1:-}"
@@ -87,13 +48,76 @@ print_shared_env_success_criteria() {
 EOF
 }
 
-echo "Loaded Tenderly shared-env inputs from ${env_file}"
-echo "Derived addresses:"
-echo "  DEPLOYER_ADDRESS=${DEPLOYER_ADDRESS}"
-echo "  UNDERWRITER_ADDRESS=${UNDERWRITER_ADDRESS}"
-echo "  CLIENT_ADDRESS=${CLIENT_ADDRESS}"
-echo "  PROVIDER_ADDRESS=${PROVIDER_ADDRESS}"
-echo
-echo "Current forge scripts still read PRIVATE_KEY."
-echo "Use 'use_actor_key deployer' before DeployUnderwritingSharedEnv or RegisterUnderwriter."
-echo "Use 'use_actor_key underwriter' before ConfigureUnderwriterRecipients."
+load_tenderly_shared_env() {
+  local env_file="${1:-.env.tenderly.shared}"
+  local required_vars
+  local var_name
+  local var_value
+
+  if [[ ! -f "${env_file}" ]]; then
+    echo "missing env file: ${env_file}" >&2
+    return 1
+  fi
+
+  if ! command -v cast >/dev/null 2>&1; then
+    echo "missing required dependency: cast" >&2
+    return 1
+  fi
+
+  # shellcheck disable=SC1090
+  source "${env_file}"
+
+  required_vars=(
+    TENDERLY_ACCESS_KEY
+    TENDERLY_VIRTUAL_TESTNET_RPC
+    TENDERLY_VIRTUAL_TESTNET_WSS
+    DEPLOYER_PRIVATE_KEY
+    UNDERWRITER_PRIVATE_KEY
+    CLIENT_PRIVATE_KEY
+    PROVIDER_PRIVATE_KEY
+    BASE_USDC
+    ACP_TREASURY
+    CLIENT_CONFIRMATION_WINDOW
+    PREMIUM_RECIPIENT
+    RECOVERY_RECIPIENT
+    MERCHANT_EXECUTION_WALLET
+  )
+
+  for var_name in "${required_vars[@]}"; do
+    eval "var_value=\${$var_name-}"
+    if [[ -z "${var_value}" ]]; then
+      echo "missing required env var: ${var_name}" >&2
+      return 1
+    fi
+  done
+
+  export TENDERLY_VERIFIER_URL="${TENDERLY_VERIFIER_URL:-${TENDERLY_VIRTUAL_TESTNET_RPC}/verify/etherscan}"
+  export DEPLOYER_ADDRESS="$(cast wallet address --private-key "${DEPLOYER_PRIVATE_KEY}")"
+  export UNDERWRITER_ADDRESS="$(cast wallet address --private-key "${UNDERWRITER_PRIVATE_KEY}")"
+  export CLIENT_ADDRESS="$(cast wallet address --private-key "${CLIENT_PRIVATE_KEY}")"
+  export PROVIDER_ADDRESS="$(cast wallet address --private-key "${PROVIDER_PRIVATE_KEY}")"
+
+  echo "Loaded Tenderly shared-env inputs from ${env_file}"
+  echo "Derived addresses:"
+  echo "  DEPLOYER_ADDRESS=${DEPLOYER_ADDRESS}"
+  echo "  UNDERWRITER_ADDRESS=${UNDERWRITER_ADDRESS}"
+  echo "  CLIENT_ADDRESS=${CLIENT_ADDRESS}"
+  echo "  PROVIDER_ADDRESS=${PROVIDER_ADDRESS}"
+  echo
+  echo "Current forge scripts still read PRIVATE_KEY."
+  echo "Use 'use_actor_key deployer' before DeployUnderwritingSharedEnv or RegisterUnderwriter."
+  echo "Use 'use_actor_key underwriter' before ConfigureUnderwriterRecipients."
+  echo
+  echo "Success criteria before deploy:"
+  print_shared_env_success_criteria
+}
+
+if ! load_tenderly_shared_env "$@"; then
+  if is_tenderly_shared_env_sourced; then
+    return 1
+  fi
+
+  echo "source this file instead of executing it:" >&2
+  echo "  source script/load-tenderly-shared-env.sh [env-file]" >&2
+  exit 1
+fi

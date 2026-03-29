@@ -21,34 +21,26 @@ Foundry scripts in `script/` deploy and operate the underwriting stack on a shar
 
 ### Prepare a Tenderly operator shell
 
-Export the required secrets and operator inputs, then source the setup helper:
+Copy the example env file, fill in the real operator inputs, then load it into
+the current shell:
 
 ```bash
-export TENDERLY_ACCESS_KEY=<tenderly-access-key>
-export DEPLOYER_PRIVATE_KEY=<deployer-private-key>
-export UNDERWRITER_PRIVATE_KEY=<underwriter-private-key>
-export CLIENT_PRIVATE_KEY=<client-private-key>
-export PROVIDER_PRIVATE_KEY=<provider-private-key>
-export BASE_USDC=<usdc-address>
-export ACP_TREASURY=<treasury-address>
-export PREMIUM_RECIPIENT=<premium-recipient-address>
-export RECOVERY_RECIPIENT=<recovery-recipient-address>
-export MERCHANT_EXECUTION_WALLET=<merchant-execution-wallet>
-
-source script/tenderly_shared_env_setup.sh
+cp script/tenderly-shared-env.env.example .env.tenderly.shared
+$EDITOR .env.tenderly.shared
+source script/load-tenderly-shared-env.sh .env.tenderly.shared
 ```
 
-The helper:
+The loader:
 
-- defaults the Tenderly RPC, WSS, verifier URL, and `CLIENT_CONFIRMATION_WINDOW`
+- validates the full Task 1 input set, including Tenderly RPC/WSS and all four actor keys
 - derives and exports `DEPLOYER_ADDRESS`, `UNDERWRITER_ADDRESS`, `CLIENT_ADDRESS`, and `PROVIDER_ADDRESS`
 - prints the deployment success criteria before you broadcast anything
-- provides `tenderly_use_actor_key <deployer|underwriter|client|provider>` so the script-facing `PRIVATE_KEY` is always switched explicitly before each `forge script` invocation
+- provides `use_actor_key <deployer|underwriter|client|provider>` so the script-facing `PRIVATE_KEY` is always switched explicitly before each `forge script` invocation
 
 ### Deploy the full stack
 
 ```bash
-tenderly_use_actor_key deployer
+use_actor_key deployer
 
 forge script script/DeployUnderwritingSharedEnv.s.sol:DeployUnderwritingSharedEnv \
   --rpc-url $TENDERLY_VIRTUAL_TESTNET_RPC --broadcast
@@ -58,7 +50,7 @@ forge script script/DeployUnderwritingSharedEnv.s.sol:DeployUnderwritingSharedEn
 
 ```bash
 export UNDERWRITING_HOOK=<hook-address>
-tenderly_use_actor_key deployer
+use_actor_key deployer
 
 forge script script/RegisterUnderwriter.s.sol:RegisterUnderwriter \
   --rpc-url $TENDERLY_VIRTUAL_TESTNET_RPC --broadcast
@@ -70,7 +62,7 @@ Called by the underwriter themselves to set premium and recovery addresses:
 
 ```bash
 export COLLATERAL_MANAGER=<manager-address>
-tenderly_use_actor_key underwriter
+use_actor_key underwriter
 
 forge script script/ConfigureUnderwriterRecipients.s.sol:ConfigureUnderwriterRecipients \
   --rpc-url $TENDERLY_VIRTUAL_TESTNET_RPC --broadcast
