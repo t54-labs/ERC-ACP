@@ -3,6 +3,9 @@
 This record captures Task 4 from
 `docs/plans/2026-03-28-tenderly-shared-env-deployment-test-plan.md`.
 
+This version supersedes the earlier Task 4 run against the previous Tenderly
+VNet. The current source of truth is the fresh VNet deployment below.
+
 ## Deployment Command
 
 This deployment used the current Tenderly-compatible Foundry verifier flow and
@@ -25,32 +28,32 @@ forge script script/DeployUnderwritingSharedEnv.s.sol:DeployUnderwritingSharedEn
 Loaded values used for this run:
 
 - Deployer: `0xFb471f732f12584C4c6e77F648B1545B117DA408`
-- Verifier URL: `https://virtual.base.eu.rpc.tenderly.co/d6ac0a5d-d160-4385-91bf-a0d56e80daf5/verify`
+- Verifier URL: `https://virtual.base.eu.rpc.tenderly.co/538b9b2f-dc98-4d74-b7ce-30a7fe843951/verify`
 
 ## Fresh Deployed Addresses
 
-- ACP implementation: `0x9b9271c04E438a5D4f135B52870021f56ca78b1A`
-- ACP proxy: `0xc435cC0619df16189502c389Ec8BEFEA21CF621c`
-- Hook implementation: `0xB445f6C9edBF239554dF69f1710A049473e9fBe9`
-- Hook proxy: `0x4122A868aB76AFc1BE672D64EB504a2470844d39`
-- Evaluator implementation: `0x89423e7f66b9E25adeaB51243282a45fFEd5d369`
-- Evaluator proxy: `0x7bd3d28371b0b12034D4eCc896E51128575115B9`
-- UnderwritingSettlementCoordinator: `0x32904fCCf8f8A8FC81670eDf649aDA4d6495F798`
-- UnderwritingCollateralManager: `0x0905Daa07eA5ca11578fe1FcA3FA780DB14F6165`
+- ACP implementation: `0x0588DB5e76Ccff3254729Bf7f53Ae8e083dD821F`
+- ACP proxy: `0x995E21FB605A2714760318d35c058f3968446682`
+- Hook implementation: `0x5e226A8F60b4Ee0E71b7C258e319637254295ff3`
+- Hook proxy: `0x95B66dF83C29175A78E56ce8ECbdc3690b64E8a7`
+- Evaluator implementation: `0x5C382400239be3a224e1639376525c1647b73DEa`
+- Evaluator proxy: `0x703f8EE31bd89C169b2BcbCb33E6697C0C6d3cd3`
+- UnderwritingSettlementCoordinator: `0xa2a3A13c8cEe2eD43b44822Fe98a1c2CCA1b085e`
+- UnderwritingCollateralManager: `0x7D1C260E06935cc31388bFA108d77C8D79587A19`
 
 ## Deployment Transactions
 
-- ACP implementation deployment: `0xf3dab87c19837a6cec78a049fd952718a9cb1f3b636d33f92712abd56304d080`
-- ACP proxy deployment: `0xb61bbf30e7ceac92e3f99d3f650f3b456c664e38118650719edc9449f58b0d2c`
-- Collateral manager deployment: `0x4008b2dfb7be29ef5bb03e520ac276f00e345e5ffaed63a8e466b2e06b768242`
-- Hook implementation deployment: `0xa213daf142a3d48db4e321e83009cb13b8ff7466671835aa8814ac5c5f8c7559`
-- Hook proxy deployment: `0xefdeb0e77939401c0103a65b2c91da31949313a707833c94c93c3457b748e103`
-- ACP whitelist call: `0x456b5152c4203427ef3dbb4b4c1792f11313c30f3a3409a667ec6d10bfe35e31`
-- Hook settlement-token pin call: `0xac7973815cdf887ca415f375ae3ceeba72cf9018f83d687de107a764ce1ef4e1`
-- Settlement coordinator deployment: `0x2189b4bb0ead60a61673bf0564554d54f1433b340c4b307a44cbde83d47e4b0b`
-- Evaluator implementation deployment: `0x62b60315e03d151a6449f55ac3a8b3fba6e9d6032ed3a89f575e6d110a423166`
-- Evaluator proxy deployment: `0xb66fb9fe9b6c2bf9bd6d064abc6bca6c24b83d7757e1dfeef44506fcc765f863`
-- Hook wiring call: `0x43d37ff23a23dd2461a92478d429ffe35ce6b806634134183315a11eb8238ad7`
+- ACP implementation deployment: `0x29b66a217f49dd5c577bf5669292c52739f8239a16b2e2348a4fd259e2a4539d`
+- ACP proxy deployment: `0x67b34fa31b0128b1b790fa125a697067cdbbf0f9ce0a8d87af5b95f16c48f252`
+- Collateral manager deployment: `0x541cf56b3121eaf4670de64a29dc0026f9210554563b2da11dadbc95f0371d5f`
+- Hook implementation deployment: `0x7bf2a3ba10842220c84c0b897b51fa936a0a1010c3dd923511e0c066c7b3db94`
+- Hook proxy deployment: `0x6d84dce531393263f10f0f30d1c267b31d5ccd3b6f958874d600c6d4ca417526`
+- ACP whitelist call: `0xd6995bd90693d5cc8d76ec510861f0c98b4eb23409bd78f540221aa010cbb96f`
+- Hook settlement-token pin call: `0xf8c1ed09220b3693f67fea850dcc1adb4c5b92f2fa001c4c405624e1603b97a6`
+- Settlement coordinator deployment: `0x7be95ff9a25e9fa0d8e8ef5b72a6ef413b720929f0dbe89d3dad8d74936028e8`
+- Evaluator implementation deployment: `0x5473c7e805264c50e3f6ff2e665e1b3a2cb7aaa1b71f2ea10cfe25e3c6e381e7`
+- Evaluator proxy deployment: `0x19bcba28ae367158890b2fcbb0009c71c48594ec044f3e48c422343ef77d1e36`
+- Hook wiring call: `0x1ce5e4d007a84638bbf8df8a3ad0c2eeec92e913dc960342e152de47d774f705`
 
 ## Verification Status
 
