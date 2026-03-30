@@ -1,7 +1,0 @@
-pyproject.toml
-tests/test_health.py
-underwriting_query_api.egg-info/PKG-INFO
-underwriting_query_api.egg-info/SOURCES.txt
-underwriting_query_api.egg-info/dependency_links.txt
-underwriting_query_api.egg-info/requires.txt
-underwriting_query_api.egg-info/top_level.txt

@@ -11,6 +11,10 @@ broadcast/
 .env
 .env.*
 .venv/
+.pytest_cache/
+*.egg-info/
+*.py[cod]
+__pycache__/
 
 # IDE
 .idea/

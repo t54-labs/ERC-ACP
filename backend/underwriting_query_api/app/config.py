@@ -5,6 +5,8 @@ from functools import lru_cache
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -41,6 +43,20 @@ class Settings(BaseSettings):
         default="0x0000000000000000000000000000000000000000",
         alias="UNDERWRITING_COLLATERAL_MANAGER_ADDRESS",
     )
+
+    @property
+    def has_runtime_configuration(self) -> bool:
+        addresses = (
+            self.acp_address,
+            self.underwriting_hook_address,
+            self.underwriting_coordinator_address,
+            self.underwriting_evaluator_address,
+            self.underwriting_collateral_manager_address,
+        )
+        return (
+            not self.underwriting_rpc_url.startswith("mock://")
+            and all(address.lower() != ZERO_ADDRESS for address in addresses)
+        )
 
 
 @lru_cache(maxsize=1)
