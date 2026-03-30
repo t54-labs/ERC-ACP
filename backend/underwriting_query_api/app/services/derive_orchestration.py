@@ -9,6 +9,7 @@ def derive_orchestration(snapshot: dict[str, Any], now: int) -> dict[str, Any]:
     settlement = snapshot["settlement"]
     dispute = snapshot["dispute"]
     derived = snapshot["derived"]
+    evaluator = snapshot.get("evaluator", {})
 
     deadline = settlement.get("unlockAt") or job.get("expiredAt")
 
@@ -55,7 +56,7 @@ def derive_orchestration(snapshot: dict[str, Any], now: int) -> dict[str, Any]:
                 "nextActionReason": "confirm during confirmation window",
                 "clientActionRequired": True,
                 "nextActionDeadline": int(hook.get("submittedAt") or 0)
-                + int(snapshot["evaluator"].get("clientConfirmationWindowSeconds") or 0),
+                + int(evaluator.get("clientConfirmationWindowSeconds") or 0),
             }
         )
         return orchestration

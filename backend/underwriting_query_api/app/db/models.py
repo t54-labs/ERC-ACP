@@ -30,6 +30,8 @@ class UnderwritingJobSnapshotRow(Base):
         Index("ix_underwriting_job_snapshots_job_status", "job_status"),
         Index("ix_underwriting_job_snapshots_sidecar_state", "sidecar_state"),
         Index("ix_underwriting_job_snapshots_settlement_state", "settlement_state"),
+        Index("ix_underwriting_job_snapshots_dispute_status", "dispute_status"),
+        Index("ix_underwriting_job_snapshots_next_action_role", "next_action_role"),
         Index("ix_underwriting_job_snapshots_underwriter", "underwriter"),
         Index("ix_underwriting_job_snapshots_client", "client"),
         Index("ix_underwriting_job_snapshots_provider", "provider"),
