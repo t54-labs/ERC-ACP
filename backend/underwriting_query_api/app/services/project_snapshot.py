@@ -47,9 +47,10 @@ def build_snapshot_row_payload(snapshot: UnderwritingJobSnapshot) -> dict[str, A
 
 
 def build_dispute_row_payload(snapshot: UnderwritingJobSnapshot) -> dict[str, Any]:
+    stable_job_id = snapshot.lineage.get("rootJobId") or snapshot.settlement_job_id or snapshot.job_id
     return {
         "settlement_job_id": snapshot.settlement_job_id,
-        "job_id": snapshot.job_id,
+        "job_id": stable_job_id,
         "status": snapshot.dispute.get("status"),
         "reason_code": snapshot.dispute.get("reasonCode"),
         "opened_by": snapshot.dispute.get("openedBy"),

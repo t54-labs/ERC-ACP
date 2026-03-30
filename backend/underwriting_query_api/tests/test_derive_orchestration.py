@@ -69,4 +69,53 @@ def test_snapshot_projection_persists_lineage_dispute_and_orchestration_scalars(
     assert snapshot_row["next_action_role"] == "client"
     assert snapshot_row["snapshot_json"]["orchestration"]["nextActionRole"] == "client"
     assert dispute_row["settlement_job_id"] == 4200
+    assert dispute_row["job_id"] == 7
     assert dispute_row["status"] == "open"
+
+
+def test_dispute_projection_uses_stable_root_job_id_for_shared_settlements():
+    snapshot = UnderwritingJobSnapshot(
+        chain_id=8453,
+        as_of_block=12_345,
+        job_id=77,
+        settlement_job_id=42,
+        job={"status": "Completed"},
+        lineage={
+            "parentJobId": 42,
+            "activeCloseJobId": 77,
+            "rootJobId": 42,
+            "isAwaitingClose": False,
+            "allowCloseJob": False,
+        },
+        hook={"sidecarState": "SuccessPendingConfirmation", "submittedAt": 100},
+        settlement={"state": "DisputeOpen", "unlockAt": 180, "escrow": "0x00000000000000000000000000000000000000ee"},
+        dispute={
+            "status": "open",
+            "reasonCode": "0x" + "44" * 32,
+            "openedBy": "0x0000000000000000000000000000000000000001",
+            "openedAt": 130,
+            "resolvedAt": None,
+            "slashAmountUsdc": None,
+            "isOpen": True,
+            "txHash": "0x" + "55" * 32,
+        },
+        underwriter={
+            "registered": True,
+            "premiumRecipient": "0x00000000000000000000000000000000000000f1",
+            "recoveryRecipient": "0x00000000000000000000000000000000000000f2",
+        },
+        derived={"clientConfirmationOpen": False},
+        orchestration={
+            "nextActionRole": "underwriter",
+            "nextActionReason": "resolve success dispute",
+            "nextActionDeadline": 180,
+            "clientActionRequired": False,
+            "providerActionRequired": False,
+            "underwriterActionRequired": True,
+        },
+    )
+
+    dispute_row = build_dispute_row_payload(snapshot)
+
+    assert dispute_row["settlement_job_id"] == 42
+    assert dispute_row["job_id"] == 42
