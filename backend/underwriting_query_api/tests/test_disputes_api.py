@@ -26,6 +26,14 @@ def test_list_disputes_can_filter_by_close_job_id(client, seeded_close_snapshot)
     assert len(response.json()["items"]) == 1
 
 
+def test_list_disputes_preserves_canonical_job_id_without_job_filter(client, seeded_close_snapshot):
+    response = client.get("/underwriting/disputes")
+
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 1
+    assert response.json()["items"][0]["jobId"] == "42"
+
+
 def test_list_disputes_rejects_invalid_status_filter(client, seeded_snapshot):
     response = client.get("/underwriting/disputes?status=bogus")
 

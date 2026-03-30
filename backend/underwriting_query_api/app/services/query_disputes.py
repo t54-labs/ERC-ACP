@@ -51,5 +51,5 @@ def list_dispute_rows(
         if dispute_row.settlement_job_id in seen:
             continue
         seen.add(dispute_row.settlement_job_id)
-        items.append(serialize_dispute_row(dispute_row, requested_job_id=requested_job_id or _snapshot_row.job_id))
+        items.append(serialize_dispute_row(dispute_row, requested_job_id=requested_job_id))
     return items
