@@ -39,7 +39,7 @@ class FakeChain:
         return 120
 
     def get_job(self, job_id: int) -> dict[str, Any]:
-        assert job_id == 42
+        assert job_id == self.job["id"]
         return dict(self.job)
 
     def get_job_kind(self, job_id: int) -> str:
@@ -117,3 +117,76 @@ def test_hydrate_snapshot_joins_acp_hook_and_settlement_reads():
     assert snapshot.settlement["state"] == "PrincipalReleased"
     assert snapshot.derived["clientConfirmationOpen"] is True
     assert snapshot.orchestration["nextActionRole"] == "client"
+
+
+@dataclass
+class SharedSettlementFakeChain(FakeChain):
+    job: dict[str, Any] = field(
+        default_factory=lambda: {
+            "id": 77,
+            "client": "0x0000000000000000000000000000000000000001",
+            "provider": "0x0000000000000000000000000000000000000002",
+            "evaluator": "0x0000000000000000000000000000000000000003",
+            "description": "close job",
+            "budget": 5_000_000,
+            "expiredAt": 999999,
+            "status": "Completed",
+            "hook": "0x00000000000000000000000000000000000000aa",
+            "paymentToken": "0x0000000000000000000000000000000000000004",
+            "providerAgentId": 0,
+            "submittedAt": 100,
+        }
+    )
+
+    def get_job_kind(self, job_id: int) -> str:
+        return "Close"
+
+    def get_commit(self, job_id: int) -> dict[str, Any]:
+        commit = super().get_commit(job_id)
+        commit["parentJobId"] = 42
+        return commit
+
+    def get_job_settlement_job_id(self, job_id: int) -> int:
+        return 42
+
+    def get_parent_job_id(self, close_job_id: int) -> int:
+        return 42
+
+    def get_active_close_job_id(self, parent_job_id: int) -> int:
+        return 77
+
+    def get_settlement_state(self, settlement_owner_job_id: int) -> str:
+        assert settlement_owner_job_id == 42
+        return "DisputeOpen"
+
+    def get_unlock_at(self, settlement_owner_job_id: int) -> int:
+        assert settlement_owner_job_id == 42
+        return 180
+
+    def get_dispute_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]:
+        assert job_id == 77
+        assert settlement_job_id == 42
+        return [
+            {
+                "eventName": "SuccessDisputeOpened",
+                "args": {
+                    "jobId": 42,
+                    "settlementJobId": 42,
+                    "reasonCode": "0x" + "44" * 32,
+                },
+                "blockNumber": 12_000,
+                "transactionHash": "0x" + "55" * 32,
+                "logIndex": 1,
+                "timestamp": 130,
+            }
+        ]
+
+
+def test_hydrate_snapshot_reuses_shared_settlement_state_for_close_jobs():
+    snapshot = hydrate_underwriting_snapshot(job_id=77, chain=SharedSettlementFakeChain())
+
+    assert snapshot.settlement_job_id == 42
+    assert snapshot.lineage["parentJobId"] == 42
+    assert snapshot.settlement["state"] == "DisputeOpen"
+    assert snapshot.dispute["status"] == "open"
+    assert snapshot.orchestration["nextActionRole"] == "underwriter"

@@ -41,6 +41,7 @@ def hydrate_underwriting_snapshot(job_id: int, chain: UnderwritingChainReader) -
     job_kind = chain.get_job_kind(job_id)
     commit = chain.get_commit(job_id)
     settlement_job_id = int(chain.get_job_settlement_job_id(job_id))
+    settlement_owner_job_id = settlement_job_id or job_id
     hook_parent_job_id = chain.get_parent_job_id(job_id)
     kernel_parent_job_id = chain.get_kernel_parent_job_id(job_id)
     lineage_parent_job_id = int(commit.get("parentJobId") or hook_parent_job_id or kernel_parent_job_id or 0)
@@ -78,8 +79,8 @@ def hydrate_underwriting_snapshot(job_id: int, chain: UnderwritingChainReader) -
     }
 
     settlement = {
-        "state": chain.get_settlement_state(job_id),
-        "unlockAt": chain.get_unlock_at(job_id),
+        "state": chain.get_settlement_state(settlement_owner_job_id),
+        "unlockAt": chain.get_unlock_at(settlement_owner_job_id),
         "escrow": chain.get_settlement_escrow(job_id),
     }
     evaluator = {
@@ -88,7 +89,7 @@ def hydrate_underwriting_snapshot(job_id: int, chain: UnderwritingChainReader) -
     dispute = derive_dispute(
         job=job,
         settlement_state=settlement["state"],
-        dispute_events=chain.get_dispute_events(job_id, settlement_job_id),
+        dispute_events=chain.get_dispute_events(job_id, settlement_owner_job_id),
     )
     recipients = chain.get_underwriter_recipients(underwriter_address)
     underwriter = {

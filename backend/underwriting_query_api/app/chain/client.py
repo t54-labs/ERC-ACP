@@ -185,11 +185,14 @@ class UnderwritingChainClient:
             RECIPIENT_KEYS,
         )
 
-    def get_settlement_state(self, job_id: int) -> str:
-        return _coerce_enum(self.coordinator.functions.jobSettlementState(job_id).call(), SETTLEMENT_STATE)
+    def get_settlement_state(self, settlement_owner_job_id: int) -> str:
+        return _coerce_enum(
+            self.coordinator.functions.jobSettlementState(settlement_owner_job_id).call(),
+            SETTLEMENT_STATE,
+        )
 
-    def get_unlock_at(self, job_id: int) -> int:
-        return int(self.coordinator.functions.unlockAtByJobId(job_id).call())
+    def get_unlock_at(self, settlement_owner_job_id: int) -> int:
+        return int(self.coordinator.functions.unlockAtByJobId(settlement_owner_job_id).call())
 
     def get_settlement_escrow(self, job_id: int) -> str:
         return self.coordinator.functions.settlementEscrow(job_id).call()
@@ -207,11 +210,9 @@ class UnderwritingChainClient:
             for event in event_cls().get_logs(
                 from_block=0,
                 to_block=latest_block,
-                argument_filters={"jobId": job_id},
+                argument_filters={"settlementJobId": settlement_job_id},
             ):
                 args = dict(event["args"])
-                if settlement_job_id and int(args.get("settlementJobId", settlement_job_id)) != settlement_job_id:
-                    continue
                 block = self.web3.eth.get_block(event["blockNumber"])
                 events.append(
                     {
