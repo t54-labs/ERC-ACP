@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.chain.client import JOB_STATUS, SETTLEMENT_STATE, SIDECAR_STATE, UnderwritingChainReader
 from app.db.session import get_db_session
+from app.services.hydrate_snapshot import NonUnderwritingJobError
 from app.services.query_jobs import (
     get_dispute_row_for_job,
     get_job_snapshot,
