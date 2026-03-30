@@ -3,11 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from fastapi import FastAPI
-from sqlalchemy import Engine, create_engine, text
+from sqlalchemy import Engine, text
+from sqlalchemy.orm import Session, sessionmaker
 from web3 import HTTPProvider, Web3
 
+from app.api.disputes import router as disputes_router
 from app.api.health import router as health_router
+from app.api.jobs import router as jobs_router
+from app.api.underwriters import router as underwriters_router
 from app.config import Settings, get_settings
+from app.db.session import build_session_factory
 
 
 @dataclass(slots=True)
@@ -45,9 +50,11 @@ def create_app(
     *,
     settings: Settings | None = None,
     health_probe: HealthProbe | None = None,
+    session_factory: sessionmaker[Session] | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
-    engine = create_engine(resolved_settings.database_url, future=True)
+    resolved_session_factory = session_factory or build_session_factory(resolved_settings.database_url)
+    engine = resolved_session_factory.kw["bind"]
     web3 = (
         Web3(HTTPProvider(resolved_settings.underwriting_rpc_url))
         if resolved_settings.has_runtime_configuration
@@ -57,8 +64,12 @@ def create_app(
     app = FastAPI(title="Underwriting Query API")
     app.state.settings = resolved_settings
     app.state.engine = engine
+    app.state.session_factory = resolved_session_factory
     app.state.health_probe = health_probe or HealthProbe(resolved_settings, engine=engine, web3=web3)
     app.include_router(health_router)
+    app.include_router(jobs_router)
+    app.include_router(disputes_router)
+    app.include_router(underwriters_router)
     return app
 
 
