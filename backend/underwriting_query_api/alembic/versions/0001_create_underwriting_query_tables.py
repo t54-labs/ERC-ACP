@@ -30,7 +30,7 @@ def upgrade() -> None:
 
     op.create_table(
         "underwriting_job_snapshots",
-        sa.Column("job_id", sa.BigInteger(), nullable=False),
+        sa.Column("job_id", sa.BigInteger(), autoincrement=False, nullable=False),
         sa.Column("settlement_job_id", sa.BigInteger(), nullable=True),
         sa.Column("parent_job_id", sa.BigInteger(), nullable=True),
         sa.Column("active_close_job_id", sa.BigInteger(), nullable=True),
@@ -97,8 +97,8 @@ def upgrade() -> None:
 
     op.create_table(
         "underwriting_disputes",
+        sa.Column("settlement_job_id", sa.BigInteger(), autoincrement=False, nullable=False),
         sa.Column("job_id", sa.BigInteger(), nullable=False),
-        sa.Column("settlement_job_id", sa.BigInteger(), nullable=True),
         sa.Column("status", sa.String(length=64), nullable=False),
         sa.Column("reason_code", sa.String(length=66), nullable=True),
         sa.Column("opened_by", sa.String(length=42), nullable=True),
@@ -108,10 +108,11 @@ def upgrade() -> None:
         sa.Column("tx_hash", sa.String(length=66), nullable=True),
         sa.Column("dispute_json", JSONB, nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.PrimaryKeyConstraint("job_id", name="pk_underwriting_disputes"),
+        sa.PrimaryKeyConstraint("settlement_job_id", name="pk_underwriting_disputes"),
     )
     op.create_index("ix_underwriting_disputes_status", "underwriting_disputes", ["status"])
     op.create_index("ix_underwriting_disputes_settlement_job_id", "underwriting_disputes", ["settlement_job_id"])
+    op.create_index("ix_underwriting_disputes_job_id", "underwriting_disputes", ["job_id"])
 
     op.create_table(
         "underwriting_action_requests",
@@ -150,6 +151,7 @@ def downgrade() -> None:
     op.drop_index("ix_underwriting_action_requests_job_id", table_name="underwriting_action_requests")
     op.drop_table("underwriting_action_requests")
     op.drop_index("ix_underwriting_disputes_settlement_job_id", table_name="underwriting_disputes")
+    op.drop_index("ix_underwriting_disputes_job_id", table_name="underwriting_disputes")
     op.drop_index("ix_underwriting_disputes_status", table_name="underwriting_disputes")
     op.drop_table("underwriting_disputes")
     op.drop_index("ix_underwriting_timeline_events_block_number_log_index", table_name="underwriting_timeline_events")

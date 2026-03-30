@@ -35,7 +35,7 @@ class UnderwritingJobSnapshotRow(Base):
         Index("ix_underwriting_job_snapshots_provider", "provider"),
     )
 
-    job_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    job_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
     settlement_job_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     parent_job_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
     active_close_job_id: Mapped[int | None] = mapped_column(BigInteger)
@@ -98,10 +98,11 @@ class UnderwritingDisputeRow(Base):
     __table_args__ = (
         Index("ix_underwriting_disputes_status", "status"),
         Index("ix_underwriting_disputes_settlement_job_id", "settlement_job_id"),
+        Index("ix_underwriting_disputes_job_id", "job_id"),
     )
 
-    job_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    settlement_job_id: Mapped[int | None] = mapped_column(BigInteger)
+    settlement_job_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=False)
+    job_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     reason_code: Mapped[str | None] = mapped_column(String(66))
     opened_by: Mapped[str | None] = mapped_column(String(42))
