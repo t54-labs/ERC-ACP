@@ -6,6 +6,7 @@
 
 - **[ERC-agentic-commerce.md](./ERC-agentic-commerce.md)** — Specification: Open → Funded → Submitted → Completed | Rejected | Expired; only the evaluator can complete a job.
 - **contracts/** — Reference implementations for the ACP migration, canonical underwriting hook integration, and settlement-side economic modules. See [contracts/README.md](./contracts/README.md).
+- **[backend/underwriting_query_api/README.md](./backend/underwriting_query_api/README.md)** — Operator guide for the underwriting query backend, Postgres materialization flow, sync worker, and dispute gateway APIs.
 
 ## Quick start
 
