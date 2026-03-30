@@ -14,6 +14,7 @@ ARTIFACT_PATHS = {
     "coordinator": OUT_DIR / "UnderwritingSettlementCoordinator.sol" / "UnderwritingSettlementCoordinator.json",
     "evaluator": OUT_DIR / "UnderwritingEvaluator.sol" / "UnderwritingEvaluator.json",
     "collateral_manager": OUT_DIR / "UnderwritingCollateralManager.sol" / "UnderwritingCollateralManager.json",
+    "escrow": OUT_DIR / "UnderwritingSettlementEscrow.sol" / "UnderwritingSettlementEscrow.json",
 }
 
 

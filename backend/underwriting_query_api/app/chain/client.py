@@ -61,6 +61,7 @@ RECIPIENT_KEYS = ["premiumRecipient", "recoveryRecipient"]
 
 class UnderwritingChainReader(Protocol):
     def get_underwriting_hook_address(self) -> str: ...
+    def get_job_counter(self) -> int: ...
     def get_chain_id(self) -> int: ...
     def get_latest_block(self) -> int: ...
     def get_current_timestamp(self) -> int: ...
@@ -83,6 +84,9 @@ class UnderwritingChainReader(Protocol):
     def get_settlement_escrow(self, job_id: int) -> str: ...
     def get_client_confirmation_window_seconds(self) -> int: ...
     def get_dispute_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]: ...
+    def get_timeline_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]: ...
+    def get_incremental_logs(self, from_block: int) -> list[dict[str, Any]]: ...
+    def resolve_job_ids_for_log(self, log: dict[str, Any]) -> list[int]: ...
 
 
 def _coerce_enum(value: Any, choices: list[str]) -> str:
@@ -124,6 +128,9 @@ class UnderwritingChainClient:
 
     def get_underwriting_hook_address(self) -> str:
         return self.hook_address
+
+    def get_job_counter(self) -> int:
+        return int(self.acp.functions.jobCounter().call())
 
     def get_chain_id(self) -> int:
         return int(self.web3.eth.chain_id)
@@ -201,27 +208,202 @@ class UnderwritingChainClient:
         return int(self.evaluator.functions.clientConfirmationWindowSeconds().call())
 
     def get_dispute_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]:
+        return [
+            {
+                "eventName": event["event_name"],
+                "args": event["payload_json"],
+                "blockNumber": event["block_number"],
+                "transactionHash": event["transaction_hash"],
+                "logIndex": event["log_index"],
+                "timestamp": event["payload_json"].get("timestamp"),
+            }
+            for event in self.get_timeline_events(job_id, settlement_job_id)
+            if event["event_name"] in {"SuccessDisputeOpened", "DisputeSlashApplied"}
+        ]
+
+    def _normalize_event(self, source: str, event: Any) -> dict[str, Any]:
+        block = self.web3.eth.get_block(event["blockNumber"])
+        args = dict(event["args"])
+        return {
+            "chain_id": self.get_chain_id(),
+            "job_id": int(args.get("jobId") or args.get("job_id") or args.get("settlementJobId") or 0),
+            "settlement_job_id": int(args.get("settlementJobId") or args.get("settlement_job_id") or 0),
+            "block_number": int(event["blockNumber"]),
+            "transaction_hash": event["transactionHash"].hex(),
+            "log_index": int(event["logIndex"]),
+            "source": source,
+            "event_name": event.event,
+            "payload_json": {
+                **args,
+                "timestamp": int(block["timestamp"]),
+            },
+        }
+
+    def _event_logs(self, contract: Any, source: str, event_names: list[str], from_block: int, to_block: int) -> list[dict[str, Any]]:
+        logs: list[dict[str, Any]] = []
+        for event_name in event_names:
+            event_cls = getattr(contract.events, event_name)
+            for event in event_cls().get_logs(from_block=from_block, to_block=to_block):
+                logs.append(self._normalize_event(source, event))
+        return logs
+
+    def get_timeline_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]:
         latest_block = self.get_latest_block()
-        events: list[dict[str, Any]] = []
-        for event_cls in (
-            self.coordinator.events.SuccessDisputeOpened,
-            self.coordinator.events.DisputeSlashApplied,
-        ):
-            for event in event_cls().get_logs(
-                from_block=0,
-                to_block=latest_block,
-                argument_filters={"settlementJobId": settlement_job_id},
-            ):
-                args = dict(event["args"])
-                block = self.web3.eth.get_block(event["blockNumber"])
-                events.append(
-                    {
-                        "eventName": event.event,
-                        "args": args,
-                        "blockNumber": int(event["blockNumber"]),
-                        "transactionHash": event["transactionHash"].hex(),
-                        "logIndex": int(event["logIndex"]),
-                        "timestamp": int(block["timestamp"]),
-                    }
+        events = []
+        events.extend(
+            self._event_logs(
+                self.acp,
+                "acp",
+                [
+                    "JobCreated",
+                    "ProviderSet",
+                    "BudgetSet",
+                    "JobFunded",
+                    "JobSubmitted",
+                    "JobCompleted",
+                    "JobRejected",
+                    "JobExpired",
+                    "PaymentReleased",
+                    "Refunded",
+                ],
+                0,
+                latest_block,
+            )
+        )
+        events.extend(
+            self._event_logs(
+                self.coordinator,
+                "coordinator",
+                [
+                    "FundingOrchestrated",
+                    "CollateralReleaseRequested",
+                    "CollateralReleased",
+                    "ExpirySettled",
+                    "RejectedJobFinalized",
+                    "SuccessDisputeOpened",
+                    "DisputeSlashApplied",
+                ],
+                0,
+                latest_block,
+            )
+        )
+        events.extend(
+            self._event_logs(
+                self.collateral_manager,
+                "collateral_manager",
+                [
+                    "CollateralLocked",
+                    "PrincipalReleasedToMerchant",
+                    "CollateralReleased",
+                    "TimeoutClaimed",
+                    "CollateralSlashed",
+                ],
+                0,
+                latest_block,
+            )
+        )
+
+        escrow_address = self.get_settlement_escrow(job_id)
+        if escrow_address and escrow_address != ZERO_ADDRESS:
+            escrow = self.web3.eth.contract(
+                address=Web3.to_checksum_address(escrow_address),
+                abi=load_abi("escrow"),
+            )
+            events.extend(
+                self._event_logs(
+                    escrow,
+                    "escrow",
+                    [
+                        "EscrowConfigured",
+                        "CollateralPullRequested",
+                        "PrincipalPullRequested",
+                        "CollateralLockRequested",
+                        "PrincipalReleaseRequested",
+                        "DeliveryConfirmationRequested",
+                        "CollateralReleaseRequested",
+                        "TimeoutClaimRequested",
+                        "SlashExecuted",
+                    ],
+                    0,
+                    latest_block,
                 )
-        return sorted(events, key=lambda item: (item["blockNumber"], item["logIndex"]))
+            )
+
+        relevant = [
+            event
+            for event in events
+            if event["job_id"] == job_id
+            or (settlement_job_id and event["settlement_job_id"] == settlement_job_id)
+        ]
+        return sorted(relevant, key=lambda item: (item["block_number"], item["log_index"]))
+
+    def get_incremental_logs(self, from_block: int) -> list[dict[str, Any]]:
+        latest_block = self.get_latest_block()
+        start_block = max(from_block + 1, 0)
+        events = []
+        events.extend(
+            self._event_logs(
+                self.acp,
+                "acp",
+                [
+                    "JobCreated",
+                    "ProviderSet",
+                    "BudgetSet",
+                    "JobFunded",
+                    "JobSubmitted",
+                    "JobCompleted",
+                    "JobRejected",
+                    "JobExpired",
+                    "PaymentReleased",
+                    "Refunded",
+                ],
+                start_block,
+                latest_block,
+            )
+        )
+        events.extend(
+            self._event_logs(
+                self.coordinator,
+                "coordinator",
+                [
+                    "FundingOrchestrated",
+                    "CollateralReleaseRequested",
+                    "CollateralReleased",
+                    "ExpirySettled",
+                    "RejectedJobFinalized",
+                    "SuccessDisputeOpened",
+                    "DisputeSlashApplied",
+                ],
+                start_block,
+                latest_block,
+            )
+        )
+        events.extend(
+            self._event_logs(
+                self.collateral_manager,
+                "collateral_manager",
+                [
+                    "CollateralLocked",
+                    "PrincipalReleasedToMerchant",
+                    "CollateralReleased",
+                    "TimeoutClaimed",
+                    "CollateralSlashed",
+                ],
+                start_block,
+                latest_block,
+            )
+        )
+        return sorted(events, key=lambda item: (item["block_number"], item["log_index"]))
+
+    def resolve_job_ids_for_log(self, log: dict[str, Any]) -> list[int]:
+        touched = set()
+        job_id = int(log.get("job_id") or 0)
+        settlement_job_id = int(log.get("settlement_job_id") or 0)
+        if job_id:
+            touched.add(job_id)
+        if settlement_job_id:
+            touched.add(settlement_job_id)
+            active_close_job_id = self.get_active_close_job_id(settlement_job_id)
+            if active_close_job_id:
+                touched.add(active_close_job_id)
+        return sorted(touched)
