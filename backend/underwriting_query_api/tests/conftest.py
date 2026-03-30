@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
+from app.config import Settings
 from app.db.models import UnderwriterRow, UnderwritingDisputeRow, UnderwritingJobSnapshotRow, UnderwritingTimelineEventRow
 from app.main import create_app
-from app.config import Settings
 
 
 @pytest.fixture
@@ -192,3 +192,91 @@ def seeded_snapshot(db_session: Session) -> UnderwritingJobSnapshotRow:
 @pytest.fixture
 def seeded_underwriter(seeded_snapshot: UnderwritingJobSnapshotRow, db_session: Session) -> UnderwriterRow:
     return db_session.get(UnderwriterRow, seeded_snapshot.underwriter)
+
+
+@pytest.fixture
+def seeded_close_snapshot(
+    db_session: Session,
+    seeded_snapshot: UnderwritingJobSnapshotRow,
+) -> UnderwritingJobSnapshotRow:
+    snapshot_json = {
+        "job": {
+            "id": 77,
+            "status": "Completed",
+            "paymentToken": "0x0000000000000000000000000000000000000004",
+            "client": "0x0000000000000000000000000000000000000001",
+            "provider": "0x0000000000000000000000000000000000000002",
+        },
+        "lineage": {
+            "parentJobId": 42,
+            "activeCloseJobId": 77,
+            "rootJobId": 42,
+            "isAwaitingClose": False,
+            "allowCloseJob": False,
+        },
+        "hook": {
+            "underwriter": "0x0000000000000000000000000000000000000042",
+            "sidecarState": "SuccessPendingConfirmation",
+            "submittedAt": 100,
+        },
+        "settlement": {
+            "state": "DisputeOpen",
+            "unlockAt": 180,
+            "escrow": "0x00000000000000000000000000000000000000ee",
+        },
+        "dispute": {
+            "status": "open",
+            "reasonCode": "0x" + "44" * 32,
+            "openedBy": "0x0000000000000000000000000000000000000001",
+            "openedAt": 130,
+            "resolvedAt": None,
+            "slashAmountUsdc": None,
+            "isOpen": True,
+            "txHash": "0x" + "55" * 32,
+        },
+        "underwriter": {
+            "registered": True,
+            "premiumRecipient": "0x00000000000000000000000000000000000000f1",
+            "recoveryRecipient": "0x00000000000000000000000000000000000000f2",
+        },
+        "derived": {},
+        "orchestration": {
+            "nextActionRole": "underwriter",
+            "nextActionReason": "resolve success dispute",
+            "nextActionDeadline": 180,
+            "clientActionRequired": False,
+            "providerActionRequired": False,
+            "underwriterActionRequired": True,
+        },
+    }
+    snapshot = UnderwritingJobSnapshotRow(
+        job_id=77,
+        settlement_job_id=42,
+        parent_job_id=42,
+        active_close_job_id=77,
+        root_job_id=42,
+        is_awaiting_close=False,
+        allow_close_job=False,
+        chain_id=8453,
+        job_status="Completed",
+        sidecar_state="SuccessPendingConfirmation",
+        settlement_state="DisputeOpen",
+        dispute_status="open",
+        next_action_role="underwriter",
+        next_action_reason="resolve success dispute",
+        next_action_deadline=None,
+        client_action_required=False,
+        provider_action_required=False,
+        underwriter_action_required=True,
+        client="0x0000000000000000000000000000000000000001",
+        provider="0x0000000000000000000000000000000000000002",
+        underwriter="0x0000000000000000000000000000000000000042",
+        payment_token="0x0000000000000000000000000000000000000004",
+        expired_at=999999,
+        submitted_at=100,
+        as_of_block=12_345,
+        snapshot_json=snapshot_json,
+    )
+    db_session.add(snapshot)
+    db_session.commit()
+    return snapshot

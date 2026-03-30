@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.chain.client import UnderwritingChainReader
 from app.db.models import UnderwritingDisputeRow, UnderwritingJobSnapshotRow, UnderwritingTimelineEventRow
+from app.services.hydrate_snapshot import NonUnderwritingJobError, hydrate_underwriting_snapshot
+from app.services.upsert_snapshot import upsert_snapshot
 
 
 def serialize_snapshot_row(row: UnderwritingJobSnapshotRow) -> dict[str, Any]:
@@ -37,15 +41,28 @@ def serialize_timeline_row(row: UnderwritingTimelineEventRow) -> dict[str, Any]:
     }
 
 
-def serialize_dispute_row(row: UnderwritingDisputeRow) -> dict[str, Any]:
+def serialize_dispute_row(row: UnderwritingDisputeRow, *, requested_job_id: int | None = None) -> dict[str, Any]:
     return {
-        "jobId": str(row.job_id),
+        "jobId": str(requested_job_id or row.job_id),
         "settlementJobId": str(row.settlement_job_id),
         **row.dispute_json,
     }
 
 
-def get_job_snapshot(db: Session, job_id: int) -> UnderwritingJobSnapshotRow | None:
+def get_job_snapshot(
+    db: Session,
+    job_id: int,
+    *,
+    refresh_chain_factory: Callable[[], UnderwritingChainReader] | None = None,
+) -> UnderwritingJobSnapshotRow | None:
+    row = db.get(UnderwritingJobSnapshotRow, job_id)
+    if row is not None or refresh_chain_factory is None:
+        return row
+
+    chain = refresh_chain_factory()
+    snapshot = hydrate_underwriting_snapshot(job_id=job_id, chain=chain)
+    upsert_snapshot(db, snapshot)
+    db.commit()
     return db.get(UnderwritingJobSnapshotRow, job_id)
 
 
@@ -100,7 +117,7 @@ def list_job_snapshots(
 
 
 def get_related_job_view(db: Session, job_id: int) -> dict[str, Any] | None:
-    row = get_job_snapshot(db, job_id)
+    row = db.get(UnderwritingJobSnapshotRow, job_id)
     if row is None:
         return None
     return {
@@ -111,7 +128,7 @@ def get_related_job_view(db: Session, job_id: int) -> dict[str, Any] | None:
 
 
 def get_timeline_rows(db: Session, job_id: int) -> list[UnderwritingTimelineEventRow]:
-    row = get_job_snapshot(db, job_id)
+    row = db.get(UnderwritingJobSnapshotRow, job_id)
     if row is None:
         return []
     stmt = (
@@ -125,8 +142,14 @@ def get_timeline_rows(db: Session, job_id: int) -> list[UnderwritingTimelineEven
     return list(db.scalars(stmt))
 
 
-def get_dispute_row_for_job(db: Session, job_id: int) -> UnderwritingDisputeRow | None:
-    row = get_job_snapshot(db, job_id)
+def get_dispute_row_for_job(
+    db: Session,
+    job_id: int,
+) -> tuple[UnderwritingDisputeRow, int] | None:
+    row = db.get(UnderwritingJobSnapshotRow, job_id)
     if row is None:
         return None
-    return db.get(UnderwritingDisputeRow, row.settlement_job_id)
+    dispute_row = db.get(UnderwritingDisputeRow, row.settlement_job_id)
+    if dispute_row is None:
+        return None
+    return dispute_row, job_id

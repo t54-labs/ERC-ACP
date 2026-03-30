@@ -31,3 +31,9 @@ def test_get_job_timeline_returns_settlement_scoped_events(client, seeded_snapsh
 
     assert response.status_code == 200
     assert len(response.json()["items"]) == 2
+
+
+def test_list_jobs_rejects_invalid_status_filter(client, seeded_snapshot):
+    response = client.get("/underwriting/jobs?status=NotARealStatus")
+
+    assert response.status_code == 422

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from fastapi import FastAPI
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 from web3 import HTTPProvider, Web3
 
+from app.chain.client import UnderwritingChainClient, UnderwritingChainReader
 from app.api.disputes import router as disputes_router
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
@@ -51,6 +53,7 @@ def create_app(
     settings: Settings | None = None,
     health_probe: HealthProbe | None = None,
     session_factory: sessionmaker[Session] | None = None,
+    chain_reader_factory: Callable[[], UnderwritingChainReader] | None = None,
 ) -> FastAPI:
     resolved_settings = settings or get_settings()
     resolved_session_factory = session_factory or build_session_factory(resolved_settings.database_url)
@@ -60,11 +63,15 @@ def create_app(
         if resolved_settings.has_runtime_configuration
         else None
     )
+    resolved_chain_reader_factory = chain_reader_factory
+    if resolved_chain_reader_factory is None and resolved_settings.has_runtime_configuration:
+        resolved_chain_reader_factory = lambda: UnderwritingChainClient(resolved_settings)
 
     app = FastAPI(title="Underwriting Query API")
     app.state.settings = resolved_settings
     app.state.engine = engine
     app.state.session_factory = resolved_session_factory
+    app.state.chain_reader_factory = resolved_chain_reader_factory
     app.state.health_probe = health_probe or HealthProbe(resolved_settings, engine=engine, web3=web3)
     app.include_router(health_router)
     app.include_router(jobs_router)
