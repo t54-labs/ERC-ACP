@@ -3,13 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.db.models import UnderwritingJobSnapshotRow
+from app.db.models import SyncStateRow, UnderwritingJobSnapshotRow
 from app.services.backfill import run_backfill
 
 
 @dataclass
 class BackfillFakeChain:
     underwriting_hook_address: str = "0x00000000000000000000000000000000000000aa"
+    latest_blocks: list[int] = field(default_factory=lambda: [300, 301, 301])
     jobs: dict[int, dict[str, Any]] = field(
         default_factory=lambda: {
             1: {
@@ -67,7 +68,9 @@ class BackfillFakeChain:
         return 8453
 
     def get_latest_block(self) -> int:
-        return 300
+        if len(self.latest_blocks) > 1:
+            return self.latest_blocks.pop(0)
+        return self.latest_blocks[0]
 
     def get_current_timestamp(self) -> int:
         return 120
@@ -140,7 +143,8 @@ class BackfillFakeChain:
     def get_dispute_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]:
         return []
 
-    def get_timeline_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]:
+    def get_timeline_events(self, job_id: int, settlement_job_id: int, *, to_block: int | None = None) -> list[dict[str, Any]]:
+        assert to_block == 300
         return [
             {
                 "chain_id": 8453,
@@ -152,11 +156,25 @@ class BackfillFakeChain:
                 "source": "acp",
                 "event_name": "JobSubmitted",
                 "payload_json": {"jobId": job_id},
-            }
+            },
+            {
+                "chain_id": 8453,
+                "job_id": 0,
+                "settlement_job_id": 0,
+                "block_number": 150 + job_id,
+                "transaction_hash": "0x" + f"{job_id + 100:064x}",
+                "log_index": 1,
+                "source": "collateral_manager",
+                "event_name": "UnderwriterRecipientsSet",
+                "payload_json": {
+                    "underwriter": "0x0000000000000000000000000000000000000042",
+                    "premiumRecipient": "0x00000000000000000000000000000000000000f1",
+                },
+            },
         ]
 
-    def get_incremental_logs(self, from_block: int) -> list[dict[str, Any]]:
-        return []
+    def get_incremental_log_batch(self, from_block: int, *, settlement_job_ids: list[int] | None = None) -> dict[str, Any]:
+        return {"head_block": 300, "logs": []}
 
     def resolve_job_ids_for_log(self, log: dict[str, Any]) -> list[int]:
         return []
@@ -166,3 +184,4 @@ def test_backfill_scans_job_counter_and_persists_underwriting_snapshots(db_sessi
     run_backfill(chain=BackfillFakeChain(), db=db_session)
 
     assert db_session.query(UnderwritingJobSnapshotRow).count() == 2
+    assert db_session.get(SyncStateRow, "lastIndexedBlock").value["block"] == 300

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.db.models import SyncStateRow, UnderwritingTimelineEventRow
+from app.db.models import SyncStateRow, UnderwritingJobSnapshotRow, UnderwritingTimelineEventRow
 from app.services.sync_logs import run_incremental_sync
 
 
@@ -110,7 +110,8 @@ class SyncFakeChain:
     def get_dispute_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]:
         return []
 
-    def get_timeline_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]:
+    def get_timeline_events(self, job_id: int, settlement_job_id: int, *, to_block: int | None = None) -> list[dict[str, Any]]:
+        assert to_block == 210
         return [
             {
                 "chain_id": 8453,
@@ -120,19 +121,25 @@ class SyncFakeChain:
                 "transaction_hash": "0x" + "11" * 32,
                 "log_index": 0,
                 "source": "coordinator",
-                "event_name": "CollateralReleaseRequested",
+                "event_name": "DeliveryConfirmationRequested",
                 "payload_json": {"jobId": job_id, "settlementJobId": settlement_job_id},
             }
         ]
 
-    def get_incremental_logs(self, from_block: int) -> list[dict[str, Any]]:
-        return [
-            {
-                "block_number": 210,
-                "job_id": 1,
-                "settlement_job_id": 1,
-            }
-        ]
+    def get_incremental_log_batch(self, from_block: int, *, settlement_job_ids: list[int] | None = None) -> dict[str, Any]:
+        assert settlement_job_ids == [1]
+        return {
+            "head_block": 210,
+            "logs": [
+                {
+                    "block_number": 210,
+                    "job_id": 0,
+                    "settlement_job_id": 1,
+                    "event_name": "DeliveryConfirmationRequested",
+                    "payload_json": {"settlementJobId": 1},
+                }
+            ],
+        }
 
     def resolve_job_ids_for_log(self, log: dict[str, Any]) -> list[int]:
         return [log["job_id"]]
@@ -140,8 +147,39 @@ class SyncFakeChain:
 
 def test_incremental_sync_refreshes_jobs_touched_by_logs(db_session):
     db_session.add(SyncStateRow(key="lastIndexedBlock", value={"block": 100}))
+    db_session.add(
+        UnderwritingJobSnapshotRow(
+            job_id=1,
+            settlement_job_id=1,
+            parent_job_id=None,
+            active_close_job_id=None,
+            root_job_id=1,
+            is_awaiting_close=False,
+            allow_close_job=False,
+            chain_id=8453,
+            job_status="Completed",
+            sidecar_state="SuccessPendingConfirmation",
+            settlement_state="SuccessPendingRelease",
+            dispute_status="none",
+            next_action_role="provider",
+            next_action_reason="release collateral",
+            next_action_deadline=None,
+            client_action_required=False,
+            provider_action_required=True,
+            underwriter_action_required=False,
+            client="0x0000000000000000000000000000000000000001",
+            provider="0x0000000000000000000000000000000000000002",
+            underwriter="0x0000000000000000000000000000000000000042",
+            payment_token="0x0000000000000000000000000000000000000004",
+            expired_at=999999,
+            submitted_at=100,
+            as_of_block=100,
+            snapshot_json={},
+        )
+    )
     db_session.commit()
 
     run_incremental_sync(chain=SyncFakeChain(), db=db_session)
 
     assert db_session.query(UnderwritingTimelineEventRow).count() > 0
+    assert db_session.get(SyncStateRow, "lastIndexedBlock").value["block"] == 210

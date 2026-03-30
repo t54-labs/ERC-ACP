@@ -9,6 +9,7 @@ from app.services.upsert_timeline import upsert_timeline_events
 
 
 def run_backfill(*, chain: UnderwritingChainReader, db: Session) -> None:
+    scanned_head = chain.get_latest_block()
     for job_id in range(1, chain.get_job_counter() + 1):
         job = chain.get_job(job_id)
         if job.get("hook", "").lower() != chain.get_underwriting_hook_address().lower():
@@ -16,7 +17,10 @@ def run_backfill(*, chain: UnderwritingChainReader, db: Session) -> None:
 
         snapshot = hydrate_underwriting_snapshot(job_id=job_id, chain=chain)
         upsert_snapshot(db, snapshot)
-        upsert_timeline_events(db, chain.get_timeline_events(job_id, snapshot.settlement_job_id))
+        upsert_timeline_events(
+            db,
+            chain.get_timeline_events(job_id, snapshot.settlement_job_id, to_block=scanned_head),
+        )
 
-    set_sync_state(db, key="lastIndexedBlock", value={"block": chain.get_latest_block()})
+    set_sync_state(db, key="lastIndexedBlock", value={"block": scanned_head})
     db.commit()

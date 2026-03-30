@@ -84,8 +84,13 @@ class UnderwritingChainReader(Protocol):
     def get_settlement_escrow(self, job_id: int) -> str: ...
     def get_client_confirmation_window_seconds(self) -> int: ...
     def get_dispute_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]: ...
-    def get_timeline_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]: ...
-    def get_incremental_logs(self, from_block: int) -> list[dict[str, Any]]: ...
+    def get_timeline_events(self, job_id: int, settlement_job_id: int, *, to_block: int | None = None) -> list[dict[str, Any]]: ...
+    def get_incremental_log_batch(
+        self,
+        from_block: int,
+        *,
+        settlement_job_ids: list[int] | None = None,
+    ) -> dict[str, Any]: ...
     def resolve_job_ids_for_log(self, log: dict[str, Any]) -> list[int]: ...
 
 
@@ -247,8 +252,9 @@ class UnderwritingChainClient:
                 logs.append(self._normalize_event(source, event))
         return logs
 
-    def get_timeline_events(self, job_id: int, settlement_job_id: int) -> list[dict[str, Any]]:
-        latest_block = self.get_latest_block()
+    def get_timeline_events(self, job_id: int, settlement_job_id: int, *, to_block: int | None = None) -> list[dict[str, Any]]:
+        latest_block = self.get_latest_block() if to_block is None else to_block
+        current_underwriter = self.get_job_underwriter(job_id)
         events = []
         events.extend(
             self._event_logs(
@@ -292,6 +298,7 @@ class UnderwritingChainClient:
                 self.collateral_manager,
                 "collateral_manager",
                 [
+                    "UnderwriterRecipientsSet",
                     "CollateralLocked",
                     "PrincipalReleasedToMerchant",
                     "CollateralReleased",
@@ -334,10 +341,20 @@ class UnderwritingChainClient:
             for event in events
             if event["job_id"] == job_id
             or (settlement_job_id and event["settlement_job_id"] == settlement_job_id)
+            or (
+                event["event_name"] == "UnderwriterRecipientsSet"
+                and current_underwriter
+                and event["payload_json"].get("underwriter") == current_underwriter
+            )
         ]
         return sorted(relevant, key=lambda item: (item["block_number"], item["log_index"]))
 
-    def get_incremental_logs(self, from_block: int) -> list[dict[str, Any]]:
+    def get_incremental_log_batch(
+        self,
+        from_block: int,
+        *,
+        settlement_job_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
         latest_block = self.get_latest_block()
         start_block = max(from_block + 1, 0)
         events = []
@@ -383,6 +400,7 @@ class UnderwritingChainClient:
                 self.collateral_manager,
                 "collateral_manager",
                 [
+                    "UnderwriterRecipientsSet",
                     "CollateralLocked",
                     "PrincipalReleasedToMerchant",
                     "CollateralReleased",
@@ -393,7 +411,37 @@ class UnderwritingChainClient:
                 latest_block,
             )
         )
-        return sorted(events, key=lambda item: (item["block_number"], item["log_index"]))
+        for settlement_job_id in sorted(set(settlement_job_ids or [])):
+            escrow_address = self.get_settlement_escrow(settlement_job_id)
+            if not escrow_address or escrow_address == ZERO_ADDRESS:
+                continue
+            escrow = self.web3.eth.contract(
+                address=Web3.to_checksum_address(escrow_address),
+                abi=load_abi("escrow"),
+            )
+            events.extend(
+                self._event_logs(
+                    escrow,
+                    "escrow",
+                    [
+                        "EscrowConfigured",
+                        "CollateralPullRequested",
+                        "PrincipalPullRequested",
+                        "CollateralLockRequested",
+                        "PrincipalReleaseRequested",
+                        "DeliveryConfirmationRequested",
+                        "CollateralReleaseRequested",
+                        "TimeoutClaimRequested",
+                        "SlashExecuted",
+                    ],
+                    start_block,
+                    latest_block,
+                )
+            )
+        return {
+            "head_block": latest_block,
+            "logs": sorted(events, key=lambda item: (item["block_number"], item["log_index"])),
+        }
 
     def resolve_job_ids_for_log(self, log: dict[str, Any]) -> list[int]:
         touched = set()
