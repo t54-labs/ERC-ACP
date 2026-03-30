@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from web3 import HTTPProvider, Web3
 
 from app.chain.client import UnderwritingChainClient, UnderwritingChainReader
+from app.api.actions import router as actions_router
 from app.api.disputes import router as disputes_router
 from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
@@ -74,6 +75,7 @@ def create_app(
     app.state.chain_reader_factory = resolved_chain_reader_factory
     app.state.health_probe = health_probe or HealthProbe(resolved_settings, engine=engine, web3=web3)
     app.include_router(health_router)
+    app.include_router(actions_router)
     app.include_router(jobs_router)
     app.include_router(disputes_router)
     app.include_router(underwriters_router)
