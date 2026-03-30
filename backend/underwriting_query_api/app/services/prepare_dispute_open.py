@@ -25,12 +25,13 @@ def prepare_dispute_open(
     if row.job_status != "Completed" or row.settlement_state != "SuccessPendingRelease" or not row.client_action_required:
         raise ValueError("success dispute open is not currently allowed")
 
+    action_job_id = row.settlement_job_id
     request_payload = {
         "contract": "UnderwritingSettlementCoordinator",
         "method": "openSuccessDispute",
         "signerRole": ACTOR_ROLE,
         "args": {
-            "jobId": row.job_id,
+            "jobId": action_job_id,
             "reasonCode": reason_code or ZERO_REASON_CODE,
         },
     }

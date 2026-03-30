@@ -14,6 +14,14 @@ def test_prepare_dispute_open_creates_action_request(client, db_session, seeded_
     assert row.status == "prepared"
 
 
+def test_prepare_dispute_open_uses_settlement_owner_job_for_close_jobs(client, seeded_close_disputeable_job):
+    response = client.post(f"/underwriting/jobs/{seeded_close_disputeable_job.job_id}/disputes/open/prepare")
+
+    assert response.status_code == 200
+    assert response.json()["jobId"] == str(seeded_close_disputeable_job.job_id)
+    assert response.json()["payload"]["args"]["jobId"] == seeded_close_disputeable_job.settlement_job_id
+
+
 def test_submit_dispute_open_persists_submission(client, db_session, seeded_disputeable_job):
     prepare = client.post(f"/underwriting/jobs/{seeded_disputeable_job.job_id}/disputes/open/prepare")
 
@@ -46,6 +54,17 @@ def test_prepare_slash_resolution_creates_action_request(client, db_session, see
     assert row.job_id == seeded_open_dispute.job_id
     assert row.actor_role == "underwriter"
     assert row.status == "prepared"
+
+
+def test_prepare_slash_resolution_uses_settlement_owner_template_for_close_jobs(client, seeded_close_snapshot):
+    response = client.post(f"/underwriting/jobs/{seeded_close_snapshot.job_id}/disputes/resolve-slash/prepare")
+
+    assert response.status_code == 200
+    assert response.json()["payload"]["args"]["jobId"] == seeded_close_snapshot.settlement_job_id
+    assert response.json()["payload"]["requiredUserInput"] == ["slashAmountUsdc", "validUntil", "nonce"]
+    assert response.json()["payload"]["args"]["attestation"]["slashAmountUsdc"] is None
+    assert response.json()["payload"]["args"]["attestation"]["validUntil"] is None
+    assert response.json()["payload"]["args"]["attestation"]["nonce"] is None
 
 
 def test_submit_slash_resolution_persists_submission(client, db_session, seeded_open_dispute):

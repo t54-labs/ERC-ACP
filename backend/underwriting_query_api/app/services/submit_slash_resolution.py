@@ -20,7 +20,12 @@ def submit_slash_resolution(
     snapshot = db.get(UnderwritingJobSnapshotRow, job_id)
     if snapshot is None:
         raise LookupError("job not found")
-    if snapshot.settlement_job_id is None or snapshot.settlement_state != "DisputeOpen" or not snapshot.underwriter_action_required:
+    if (
+        snapshot.settlement_job_id is None
+        or snapshot.job_status != "Completed"
+        or snapshot.settlement_state != "DisputeOpen"
+        or not snapshot.underwriter_action_required
+    ):
         raise ValueError("dispute slash resolution is not currently allowed")
 
     row = db.get(UnderwritingActionRequestRow, request_id)

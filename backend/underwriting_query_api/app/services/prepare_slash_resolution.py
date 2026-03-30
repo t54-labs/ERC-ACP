@@ -16,7 +16,7 @@ def prepare_slash_resolution(db: Session, job_id: int) -> UnderwritingActionRequ
         raise LookupError("job not found")
     if row.settlement_job_id is None:
         raise ValueError("job is missing settlement linkage")
-    if row.settlement_state != "DisputeOpen" or not row.underwriter_action_required:
+    if row.job_status != "Completed" or row.settlement_state != "DisputeOpen" or not row.underwriter_action_required:
         raise ValueError("dispute slash resolution is not currently allowed")
 
     snapshot = row.snapshot_json
@@ -24,21 +24,23 @@ def prepare_slash_resolution(db: Session, job_id: int) -> UnderwritingActionRequ
     dispute = snapshot.get("dispute", {})
     job = snapshot.get("job", {})
     escrow = settlement.get("escrow")
+    action_job_id = row.settlement_job_id
     request_payload = {
         "contract": "UnderwritingSettlementCoordinator",
         "method": "applySuccessDisputeSlash",
         "signerRole": ACTOR_ROLE,
+        "requiredUserInput": ["slashAmountUsdc", "validUntil", "nonce"],
         "args": {
-            "jobId": row.job_id,
+            "jobId": action_job_id,
             "attestation": {
                 "settlementJobId": row.settlement_job_id,
                 "safe": escrow,
                 "user": job.get("client"),
                 "merchant": escrow,
-                "slashAmountUsdc": dispute.get("slashAmountUsdc") or 0,
+                "slashAmountUsdc": None,
                 "reasonCode": dispute.get("reasonCode"),
-                "validUntil": settlement.get("unlockAt") or row.expired_at or 0,
-                "nonce": 0,
+                "validUntil": None,
+                "nonce": None,
             },
         },
     }
