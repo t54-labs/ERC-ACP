@@ -100,12 +100,18 @@ def _coerce_enum(value: Any, choices: list[str]) -> str:
     return choices[int(value)]
 
 
+def _hex_if_bytes(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray)):
+        return "0x" + value.hex()
+    return value
+
+
 def _coerce_struct(value: Any, keys: list[str]) -> dict[str, Any]:
     if isinstance(value, dict):
-        return dict(value)
+        return {k: _hex_if_bytes(v) for k, v in value.items()}
     if hasattr(value, "_asdict"):
-        return dict(value._asdict())
-    return {key: value[index] for index, key in enumerate(keys)}
+        return {k: _hex_if_bytes(v) for k, v in value._asdict().items()}
+    return {key: _hex_if_bytes(value[index]) for index, key in enumerate(keys)}
 
 
 class UnderwritingChainClient:
@@ -152,13 +158,18 @@ class UnderwritingChainClient:
         return job
 
     def get_job_kind(self, job_id: int) -> str:
-        return _coerce_enum(self.acp.functions.getJobKind(job_id).call(), JOB_KIND)
+        if self.get_parent_job_id(job_id) != 0:
+            return "Close"
+        commit = self.get_commit(job_id)
+        if bool(commit.get("allowCloseJob")):
+            return "Open"
+        return "Standalone"
 
     def get_kernel_parent_job_id(self, job_id: int) -> int:
-        return int(self.acp.functions.getParentJobId(job_id).call())
+        return self.get_parent_job_id(job_id)
 
     def get_kernel_close_job_id(self, job_id: int) -> int:
-        return int(self.acp.functions.getCloseJobId(job_id).call())
+        return self.get_active_close_job_id(job_id)
 
     def get_commit(self, job_id: int) -> dict[str, Any]:
         return _coerce_struct(self.hook.functions.getCommit(job_id).call(), COMMIT_KEYS)
@@ -228,7 +239,7 @@ class UnderwritingChainClient:
 
     def _normalize_event(self, source: str, event: Any) -> dict[str, Any]:
         block = self.web3.eth.get_block(event["blockNumber"])
-        args = dict(event["args"])
+        args = {k: _hex_if_bytes(v) for k, v in dict(event["args"]).items()}
         return {
             "chain_id": self.get_chain_id(),
             "job_id": int(args.get("jobId") or args.get("job_id") or args.get("settlementJobId") or 0),

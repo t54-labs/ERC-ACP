@@ -4,6 +4,8 @@ This backend materializes underwriting-specific ACP state into Postgres and serv
 
 The chain remains the source of truth. This service reads contracts, derives underwriting-only views, and stores the resulting snapshots in Postgres so list and search queries do not depend on live chain scans on every request.
 
+For a fully local operator flow, see `LOCAL_ANVIL_RUNBOOK.md`.
+
 ## Stack
 
 - FastAPI for the HTTP surface
